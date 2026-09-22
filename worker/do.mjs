@@ -97,7 +97,7 @@ export class ContextaLibrary extends DurableObject {
       latestId: this.state.latestId ?? this.state.items[0]?.id ?? null,
       adjustCount: this.state.lastAdjustCount,
       llm: {
-        on: !!this.env.ADP_APP_KEY,
+        on: !!(this.env.ADP_SECRET_ID && this.env.ADP_SECRET_KEY && this.env.ADP_APP_KEY),
         lastError: this.state.llmError || null,
       },
     };
@@ -188,14 +188,15 @@ export class ContextaLibrary extends DurableObject {
 
     if (item) {
       const when = dateOnly();
-      const key = this.env.ADP_APP_KEY;
+      const creds = {
+        secretId: this.env.ADP_SECRET_ID,
+        secretKey: this.env.ADP_SECRET_KEY,
+        appKey: this.env.ADP_APP_KEY,
+      };
       let viaLLM = false;
 
-      if (key) {
-        const r = await llmOrganize(item.excerpt, {
-          appKey: key,
-          endpoint: this.env.ADP_CHAT_ENDPOINT,
-        });
+      if (creds.secretId && creds.secretKey && creds.appKey) {
+        const r = await llmOrganize(item.excerpt, creds);
         if (r.ok) {
           applyLLMResult(item, r.data);
           viaLLM = true;

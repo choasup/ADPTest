@@ -87,10 +87,14 @@ async function organizeById(id) {
   const item = s.items.find((i) => i.id === id);
   if (!item) return;
 
-  const key = process.env.ADP_APP_KEY;
+  const creds = {
+    secretId: process.env.ADP_SECRET_ID,
+    secretKey: process.env.ADP_SECRET_KEY,
+    appKey: process.env.ADP_APP_KEY,
+  };
   let viaLLM = false;
-  if (key) {
-    const r = await llmOrganize(item.excerpt, { appKey: key });
+  if (creds.secretId && creds.secretKey && creds.appKey) {
+    const r = await llmOrganize(item.excerpt, creds);
     if (r.ok) {
       applyLLMResult(item, r.data);
       viaLLM = true;
