@@ -1,8 +1,8 @@
-import type { AgentTool, ContextItem } from './types';
+/** 种子数据 — 与交付设计稿的示例数据一致。
+ *  首次启动写入 db.json；删除 server/data/ 可重置。运行期数据由整理 agent 维护。
+ */
 
-/** 初始数据来自交付设计稿的示例数据；运行期由 agent 维护，人只投喂与给信号。 */
-
-export const INITIAL_ITEMS: ContextItem[] = [
+export const SEED_ITEMS = [
   {
     id: 'c1',
     type: '会议纪要',
@@ -236,8 +236,7 @@ export const INITIAL_ITEMS: ContextItem[] = [
   },
 ];
 
-/** 示例工具表（需替换为真实环境的服务状态）。 */
-export const INITIAL_TOOLS: AgentTool[] = [
+export const SEED_TOOLS = [
   { id: 'gpu', name: 'GPU 服务器 · aurora-01', meta: 'A100 80G ×2 · 显存 31%', status: '空闲', on: true },
   { id: 'cpu', name: '本地 CPU 工作站', meta: '32 核 · 负载 0.7', status: '空闲', on: true },
   { id: 'pg', name: '主库 PostgreSQL', meta: 'context.items · 8,412 行', status: '在线', on: true },
@@ -246,10 +245,3 @@ export const INITIAL_TOOLS: AgentTool[] = [
   { id: 'ocr', name: 'OCR / 转写服务', meta: 'Whisper + PaddleOCR', status: '占用', on: false },
   { id: 'web', name: '网页抓取', meta: '剪藏正文提取', status: '离线', on: false },
 ];
-
-/** 近两周入库柱状图的日期窗口（14 天，MM-DD）。 */
-export function sparkDays(): string[] {
-  const days: string[] = [];
-  for (let d = 7; d <= 20; d++) days.push('09-' + String(d).padStart(2, '0'));
-  return days;
-}

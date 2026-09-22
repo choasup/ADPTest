@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header';
 import AgentNotice from './components/AgentNotice';
 import Sidebar from './components/Sidebar';
@@ -6,8 +6,15 @@ import ContextList from './components/ContextList';
 import FeedBar from './components/FeedBar';
 import DetailPanel from './components/DetailPanel';
 import { useNarrow } from './hooks/useNarrow';
-import { INITIAL_ITEMS, INITIAL_TOOLS } from './data';
-import { SIGNAL_LABEL, SIGNAL_WEIGHT } from './types';
+import {
+  fetchState,
+  postClearPending,
+  postFeed,
+  postRegenerate,
+  postSignal,
+  postToggleTool,
+} from './api';
+import type { FeedImage } from './api';
 import type { AgentTool, ContextItem, Signal } from './types';
 
 /** Tweaks（设计稿上的可调项，按默认值实现）。 */
@@ -15,25 +22,52 @@ const DENSITY = '舒适' as '舒适' | '紧凑';
 const SHOW_ENTITIES = true;
 const SHOW_AGENT_LOG = true;
 
-/** 文境 Contexta — Agent 维护的上下文记忆库，人只投喂与给信号。 */
+/** 状态轮询间隔：agent 异步整理完成后前端据此感知 pending。 */
+const POLL_MS = 2000;
+
+/** 文境 Contexta — Agent 维护的上下文记忆库，人只投喂与给信号。
+ *  数据在服务端（整理 agent 拥有数据），本地仅持有轮询快照与视图状态。
+ */
 export default function App() {
-  const [items, setItems] = useState<ContextItem[]>(INITIAL_ITEMS);
+  const [items, setItems] = useState<ContextItem[]>([]);
+  const [tools, setTools] = useState<AgentTool[]>([]);
+  const [pending, setPending] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const latestIdRef = useRef<string | null>(null);
+  const adjustCountRef = useRef(3);
+
   const [query, setQuery] = useState('');
   const [topic, setTopic] = useState('全部');
   const [type, setType] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>('c1');
   const [instruction, setInstruction] = useState('');
   const [runLog, setRunLog] = useState('');
-  const [tools, setTools] = useState<AgentTool[]>(INITIAL_TOOLS);
-  const [pending, setPending] = useState(2);
 
   const narrow = useNarrow(900);
 
-  const visible = useMemo(() => items, [items]);
+  const syncState = useCallback(async () => {
+    try {
+      const s = await fetchState();
+      setItems(s.items);
+      setTools(s.tools);
+      setPending(s.pending);
+      latestIdRef.current = s.latestId;
+      adjustCountRef.current = s.adjustCount;
+      setLoaded(true);
+    } catch {
+      setLoaded(true); // 显示空态而非白屏，回执会提示通信失败
+    }
+  }, []);
+
+  useEffect(() => {
+    void syncState();
+    const timer = setInterval(() => void syncState(), POLL_MS);
+    return () => clearInterval(timer);
+  }, [syncState]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return visible.filter((i) => {
+    return items.filter((i) => {
       if (topic !== '全部' && i.topic !== topic) return false;
       if (type && i.type !== type) return false;
       if (!q) return true;
@@ -45,7 +79,7 @@ export default function App() {
       ).toLowerCase();
       return hay.includes(q);
     });
-  }, [visible, query, topic, type]);
+  }, [items, query, topic, type]);
 
   const selected = useMemo(
     () => items.find((i) => i.id === selectedId) ?? null,
@@ -56,35 +90,66 @@ export default function App() {
   const showSidebar = !narrow;
   const showDetail = narrow ? !!selected : true;
 
-  /** 人类信号：唯一可写动作，写权重并出回执。 */
-  const handleSignal = (id: string, signal: Signal) => {
+  /** 人类信号：唯一可写动作，agent 在服务端写权重并出回执。 */
+  const handleSignal = async (id: string, signal: Signal) => {
     const item = items.find((i) => i.id === id);
     if (!item) return;
-    const w = SIGNAL_WEIGHT[signal];
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, signal, weight: w === null ? i.weight : w } : i)),
-    );
-    setRunLog(
-      `已告诉 agent：「${item.title}」${SIGNAL_LABEL[signal]}，它会在下一轮调整权重与保留策略。`,
-    );
+    try {
+      const { runLog } = await postSignal(id, signal);
+      setRunLog(runLog);
+      void syncState();
+    } catch {
+      setRunLog(`与 agent 通信失败，信号未写入：「${item.title}」`);
+    }
   };
 
-  const handleRegenerate = (item: ContextItem) => {
-    setRunLog(`已让 agent 为「${item.title}」重跑一次摘要与实体抽取。`);
+  const handleRegenerate = async (item: ContextItem) => {
+    try {
+      const { runLog } = await postRegenerate(item.id);
+      setRunLog(runLog);
+      void syncState();
+    } catch {
+      setRunLog(`与 agent 通信失败，未能为「${item.title}」重新生成。`);
+    }
   };
 
-  /** 提示条动作：清空筛选，跳到最近整理的条目。 */
-  const reviewPending = () => {
+  /** 投喂 / 指令提交：文本 + 图片附件一并交给服务端 agent。 */
+  const handleFeed = async (text: string, images: FeedImage[]) => {
+    if (!text.trim() && !images.length) return;
+    try {
+      const { runLog } = await postFeed(text, images);
+      setRunLog(runLog);
+      void syncState();
+    } catch {
+      setRunLog('与 agent 通信失败，本次投喂未送达。');
+    }
+  };
+
+  /** 提示条动作：清空筛选，跳到 agent 最近整理的条目。 */
+  const reviewPending = async () => {
     setTopic('全部');
     setType(null);
     setQuery('');
-    setSelectedId('c3');
+    const target = latestIdRef.current ?? items[0]?.id ?? null;
+    setSelectedId(target);
     setPending(0);
     setRunLog('已定位到 agent 最近整理的条目。');
+    try {
+      await postClearPending();
+    } catch {
+      // 下一轮轮询会重新同步，忽略
+    }
   };
 
-  const toggleTool = (id: string) => {
+  const toggleTool = async (id: string) => {
+    // 乐观更新，失败回滚由轮询纠正
     setTools((prev) => prev.map((t) => (t.id === id ? { ...t, on: !t.on } : t)));
+    try {
+      const { tools } = await postToggleTool(id);
+      setTools(tools);
+    } catch {
+      void syncState();
+    }
   };
 
   const pickEntity = (name: string) => {
@@ -95,16 +160,30 @@ export default function App() {
 
   const listTitle = topic === '全部' ? '全部 context' : topic;
 
+  if (!loaded) {
+    return (
+      <div className="app">
+        <div className="stream-empty" style={{ padding: 'var(--space-8)' }}>
+          正在连接整理 agent…
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
-      <Header query={query} onQuery={setQuery} items={visible} />
+      <Header query={query} onQuery={setQuery} items={items} />
 
-      <AgentNotice pending={pending} onReview={reviewPending} />
+      <AgentNotice
+        pending={pending}
+        adjustCount={adjustCountRef.current}
+        onReview={reviewPending}
+      />
 
       <div className={'app-grid' + (narrow ? ' narrow' : '')}>
         {showSidebar && (
           <Sidebar
-            items={visible}
+            items={items}
             topic={topic}
             onTopic={setTopic}
             type={type}
@@ -123,7 +202,7 @@ export default function App() {
         >
           <ContextList
             filtered={filtered}
-            total={visible.length}
+            total={items.length}
             title={listTitle}
             selectedId={selectedId}
             onSelect={setSelectedId}
@@ -132,7 +211,7 @@ export default function App() {
           <FeedBar
             instruction={instruction}
             onInstruction={setInstruction}
-            onRunLog={setRunLog}
+            onSubmit={handleFeed}
             runLog={runLog}
             tools={tools}
           />

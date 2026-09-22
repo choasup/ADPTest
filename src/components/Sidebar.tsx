@@ -1,5 +1,11 @@
-import { sparkDays } from '../data';
 import type { AgentTool, ContextItem, ToolStatus } from '../types';
+
+/** 近两周入库柱状图的日期窗口（14 天，MM-DD）。 */
+function sparkDays(): string[] {
+  const days: string[] = [];
+  for (let d = 7; d <= 20; d++) days.push('09-' + String(d).padStart(2, '0'));
+  return days;
+}
 
 interface SidebarProps {
   items: ContextItem[];

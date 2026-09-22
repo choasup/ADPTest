@@ -1,12 +1,14 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import type { KeyboardEvent, ClipboardEvent, DragEvent } from 'react';
 import { PRESETS } from '../types';
+import { readFileAsImage } from '../api';
+import type { FeedImage } from '../api';
 import type { AgentTool } from '../types';
 
 interface FeedBarProps {
   instruction: string;
   onInstruction: (value: string) => void;
-  onRunLog: (msg: string) => void;
+  onSubmit: (text: string, images: FeedImage[]) => void;
   runLog: string;
   tools: AgentTool[];
 }
@@ -17,35 +19,32 @@ function toolShortName(name: string): string {
 
 /** 底部 投喂 / 指令 条。
  *  图片投喂是隐形的：没有上传按钮、没有缩略图卡片——
- *  整条区域是 drop 区，输入框支持粘贴图片。
+ *  整条区域是 drop 区，输入框支持粘贴图片；图片读为 base64 随指令提交。
  */
 export default function FeedBar({
   instruction,
   onInstruction,
-  onRunLog,
+  onSubmit,
   runLog,
   tools,
 }: FeedBarProps) {
   const [dragging, setDragging] = useState(false);
-  /** 待提交的图片附件（仅计数，不渲染缩略图）。 */
-  const attachmentsRef = useRef<string[]>([]);
+  /** 待提交的图片附件（base64，不渲染缩略图）。 */
+  const [attachments, setAttachments] = useState<FeedImage[]>([]);
 
-  const addFiles = (fileList: FileList | null) => {
+  const addFiles = async (fileList: FileList | null) => {
     const files = [...(fileList ?? [])].filter((f) => f.type.startsWith('image/'));
     if (!files.length) return;
-    attachmentsRef.current = [
-      ...attachmentsRef.current,
-      ...files.map((f) => f.name || '截图.png'),
-    ];
     setDragging(false);
-    onRunLog(`收到 ${files.length} 张图片，agent 正在 OCR 识别并归类。`);
+    const images = await Promise.all(files.map(readFileAsImage));
+    setAttachments((prev) => [...prev, ...images]);
   };
 
   const onPaste = (e: ClipboardEvent<HTMLInputElement>) => {
     const items = e.clipboardData?.files;
     if (items && items.length) {
       e.preventDefault();
-      addFiles(items);
+      void addFiles(items);
     }
   };
 
@@ -56,7 +55,7 @@ export default function FeedBar({
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    addFiles(e.dataTransfer.files);
+    void addFiles(e.dataTransfer.files);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -65,14 +64,10 @@ export default function FeedBar({
 
   const run = () => {
     const text = instruction.trim();
-    const count = attachmentsRef.current.length;
-    if (!text && !count) return;
-    const parts: string[] = [];
-    if (count) parts.push(`已收下 ${count} 张图片，正在 OCR 识别、生成摘要并归类`);
-    if (text) parts.push(`指令「${text}」将在下一轮整理中执行`);
+    if (!text && !attachments.length) return;
+    onSubmit(text, attachments);
     onInstruction('');
-    attachmentsRef.current = [];
-    onRunLog(`agent ${parts.join('；')}。`);
+    setAttachments([]);
   };
 
   const activeToolLine =
@@ -100,7 +95,10 @@ export default function FeedBar({
           </span>
         ))}
         <span className="feed-tools" />
-        <span className="feed-tools-note">本轮将调用：{activeToolLine}</span>
+        <span className="feed-tools-note">
+          本轮将调用：{activeToolLine}
+          {attachments.length > 0 ? ` · 待提交截图 ${attachments.length} 张` : ''}
+        </span>
       </div>
       <div className="feed-input-row">
         <input

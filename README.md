@@ -34,10 +34,52 @@ agent 自动完成解析、摘要、归类、实体与关系抽取、权重维�
 
 ```bash
 npm install
-npm run dev      # 开发服务器
+npm run dev      # API(8787) + vite dev server 并行启动（/api 已代理）
 npm run build    # TypeScript 检查 + 生产构建
-npm run preview  # 预览生产构建
+npm start        # 生产模式：单进程服务 dist 静态文件 + API（http://localhost:8787）
 ```
+
+## 架构
+
+全栈原型：**前端（React 18 + TypeScript + Vite）+ 整理 agent（Node/Express）**。
+数据在服务端由 agent 维护，前端只读轮询（2s）；「signal」是唯一人类可写动作。
+
+```
+前端 src/                    服务端 server/
+├── App.tsx        状态容器    ├── index.mjs   Express API + 静态服务
+├── api.ts         API 封装    ├── agent.mjs   整理 agent（异步流水线）
+├── components/…   全部界面    ├── store.mjs   JSON 文件持久化（防抖写盘）
+└── styles/…       Classical   └── seed.mjs    种子数据（设计稿示例数据）
+```
+
+### 整理流水线（server/agent.mjs）
+
+```
+投喂受理（state=待确认，log:排队整理）
+  → 异步整理（~2.5s）：
+      摘要生成（截取/OCR 模拟）→ 主题归类（关键词规则 + 置信度，
+      低置信 → 待归类 + 待确认）→ 实体抽取（词典 + 「引号」概念）
+      → 关系生成 → 同主题旧条目权重微调
+  → pending++（提示条）→ 前端轮询感知 → 点击定位 → pending 清零
+```
+
+自然语言指令：合成时间线（真实写回 log）、合并重复条目（真实合并 +
+calls 累加）、重新抽取所有实体（全量重跑）；其他指令受理回执。
+图片投喂：base64 上传 → 落盘 `server/data/uploads/` → OCR 模拟整理。
+
+### API
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/state` | 条目列表 + 工具 + pending + latestId（前端轮询） |
+| `POST /api/feed` | 投喂 `{ text, images:[{name,data}] }`，触发异步整理 |
+| `POST /api/signal` | 人类信号写入 `{ id, signal }`（唯一可写） |
+| `POST /api/instruction` | 自然语言指令 `{ text }` |
+| `POST /api/regenerate` | 重跑摘要与实体 `{ id }` |
+| `POST /api/tools/toggle` | 工具启用开关 `{ id }` |
+| `POST /api/pending/clear` | 提示条已查看 |
+
+存储：`server/data/db.json`（运行时数据，不入 git）；删除该目录即重置回种子。
 
 技术栈：React 18 + TypeScript + Vite。样式为 Classical 设计系统
 （Cormorant Garamond + Lora、近白底、颜色只做描边与细线、1px 描边按钮），
@@ -48,9 +90,9 @@ token 全部来自 `src/styles/tokens.css`，不硬编码任何色值/字号。
 ```
 src/
 ├── main.tsx              # 入口
-├── App.tsx               # 状态容器（全部本地状态，见下）
+├── App.tsx               # 状态容器（轮询 + API 动作）
+├── api.ts                # 后端 API 封装（fetch）
 ├── types.ts              # ContextItem 等数据模型 + 信号/权重映射
-├── data.ts               # 初始示例数据（需替换为真实后端数据）
 ├── hooks/
 │   └── useNarrow.ts      # <900px 响应式
 ├── styles/
@@ -61,32 +103,29 @@ src/
     ├── AgentNotice.tsx   # Agent 提示条
     ├── Sidebar.tsx       # 左栏（主题/类型/实体/工具/入库图）
     ├── ContextList.tsx   # 中栏列表
-    ├── FeedBar.tsx       # 投喂/指令条（拖放 + 粘贴图片）
+    ├── FeedBar.tsx       # 投喂/指令条（拖放 + 粘贴图片 → base64 上传）
     └── DetailPanel.tsx   # 右栏详情（含 SVG 关系图）
 ```
 
 ## 状态
 
 ```
-items[]         # ContextItem[]，agent 维护，前端只读；signal 是唯一人类可写字段
+items[]         # 服务端轮询快照，agent 维护；signal 是唯一人类可写字段
 query           # 搜索词
 topic           # '全部' | 主题名
 type            # null | 类型名
 selectedId      # 当前选中条目（窄屏 null = 显示列表）
 instruction     # 投喂/指令输入框
-runLog          # 最近一条回执文案
+runLog          # 最近一条回执文案（来自服务端 agent）
 tools[]         # 工具启用状态
 pending         # agent 新整理条数（提示条）
 narrow          # 视口 < 900px
 ```
 
-## 接入真实后端
+## 原型边界
 
-当前数据为交付设计稿中的示例数据。需要的服务端能力：
-
-- 条目列表（含权重与调用统计）
-- 投喂接口（文本/链接/图片，返回异步处理任务）
-- 信号写入接口
-- 自然语言指令接口
-- 工具启用开关
-- agent 活动摘要（pending）
+- 整理 agent 为**确定性规则模拟**（关键词归类、词典实体、截取式摘要、OCR 模拟），
+  接真实 LLM 时替换 `server/agent.mjs` 的 `classifyTopic/summarize/extractEntities`
+  即可，API 与前端无需改动
+- 检索权重微调为模拟策略；calls/lastCall 为静态统计
+- 图片 OCR 为模拟（文件真实落盘，识别文字为占位文案）
