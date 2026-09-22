@@ -1,0 +1,255 @@
+import type { AgentTool, ContextItem } from './types';
+
+/** 初始数据来自交付设计稿的示例数据；运行期由 agent 维护，人只投喂与给信号。 */
+
+export const INITIAL_ITEMS: ContextItem[] = [
+  {
+    id: 'c1',
+    type: '会议纪要',
+    topic: '项目 · Aurora',
+    when: '09-18 14:30',
+    source: '飞书妙记',
+    state: '已整理',
+    conf: 0.94,
+    title: '产品评审：记忆层优先级排序',
+    summary:
+      '评审确认记忆层先做「检索质量」而非「容量」。小林提出把长期记忆按衰减曲线打分，过期条目降权而非删除；周颖要求 10 月前给出一版可演示的检索评测集。遗留分歧：是否引入图结构检索，下周单独讨论。',
+    entities: [
+      { name: '张小林', kind: '人' },
+      { name: '周颖', kind: '人' },
+      { name: 'Aurora', kind: '项目' },
+      { name: '衰减曲线', kind: '概念' },
+      { name: '检索评测集', kind: '产物' },
+    ],
+    relations: [
+      { a: '张小林', rel: '提出', b: '衰减曲线打分' },
+      { a: '周颖', rel: '要求交付', b: '检索评测集 · 10月' },
+      { a: 'Aurora', rel: '待定', b: '图结构检索' },
+    ],
+    excerpt:
+      '周颖：容量不是瓶颈，检索准确率才是。\n张小林：那我们给每条记忆一个时间衰减分，过期的降权不删。\n周颖：可以，但我要一版评测集，十月之前。',
+    log: [
+      { when: '09-18', what: '从飞书妙记自动导入' },
+      { when: '09-18', what: '生成摘要，抽取 5 个实体' },
+      { when: '09-19', what: '归入主题「项目 · Aurora」（置信度 0.94）' },
+    ],
+    signal: '常规',
+    weight: 0.92,
+    calls: 41,
+    lastCall: '今天 09:12',
+  },
+  {
+    id: 'c2',
+    type: '对话片段',
+    topic: '记忆系统研究',
+    when: '09-17 22:04',
+    source: '微信 · 与张小林',
+    state: '已整理',
+    conf: 0.88,
+    title: '关于 embedding 选型的一段争论',
+    summary:
+      '讨论向量模型选型：小林倾向自训小模型以贴合内部术语，我担心维护成本。共识是先用通用模型跑基线，把内部术语做成同义词表挂在检索前置。',
+    entities: [
+      { name: '张小林', kind: '人' },
+      { name: 'embedding 选型', kind: '概念' },
+      { name: '同义词表', kind: '方案' },
+    ],
+    relations: [
+      { a: '张小林', rel: '主张', b: '自训小模型' },
+      { a: '同义词表', rel: '作为', b: '折中方案' },
+    ],
+    excerpt:
+      '小林：通用模型对我们内部黑话完全没感觉。\n我：先跑个基线吧，没有基线谈不上贵不贵。',
+    log: [
+      { when: '09-17', what: '手动粘贴导入' },
+      { when: '09-17', what: '生成摘要' },
+      { when: '09-20', what: '与 c1 建立关联：同属记忆层讨论' },
+    ],
+    signal: '常规',
+    weight: 0.74,
+    calls: 18,
+    lastCall: '昨天 21:40',
+  },
+  {
+    id: 'c3',
+    type: '文档',
+    topic: '记忆系统研究',
+    when: '09-15 09:12',
+    source: 'context-engineering.pdf · 28 页',
+    state: '待确认',
+    conf: 0.61,
+    title: '《Context Engineering》阅读笔记',
+    summary:
+      '作者把上下文管理拆成四步：采集、压缩、检索、淘汰。其中「压缩」主张摘要与原文双存，检索命中摘要后再回溯原文。与我们现在只存摘要的做法冲突，值得试。',
+    entities: [
+      { name: '上下文四步法', kind: '概念' },
+      { name: '摘要与原文双存', kind: '方案' },
+    ],
+    relations: [{ a: '摘要与原文双存', rel: '冲突于', b: '当前只存摘要' }],
+    excerpt: 'Summaries are lossy by construction; keep the original addressable.',
+    log: [
+      { when: '09-15', what: '上传 PDF，抽取正文' },
+      { when: '09-15', what: '生成摘要（置信度偏低，建议人工确认）' },
+    ],
+    signal: '常规',
+    weight: 0.55,
+    calls: 9,
+    lastCall: '3 天前',
+  },
+  {
+    id: 'c4',
+    type: '链接剪藏',
+    topic: '记忆系统研究',
+    when: '09-14 11:40',
+    source: 'arxiv.org',
+    state: '已整理',
+    conf: 0.9,
+    title: 'MemGPT：把上下文当操作系统分页管理',
+    summary:
+      '论文把 LLM 上下文类比成内存分页，冷热数据在主上下文与外部存储间换入换出。对我们的启发是：不要试图把所有 context 塞进一次调用，而是设计调度策略。',
+    entities: [
+      { name: 'MemGPT', kind: '论文' },
+      { name: '上下文分页', kind: '概念' },
+      { name: '调度策略', kind: '概念' },
+    ],
+    relations: [
+      { a: 'MemGPT', rel: '启发', b: '调度策略设计' },
+      { a: '上下文分页', rel: '类比于', b: '操作系统内存管理' },
+    ],
+    excerpt: 'Virtual context management, borrowed from OS paging.',
+    log: [
+      { when: '09-14', what: '从浏览器剪藏' },
+      { when: '09-14', what: '抓取正文并生成摘要' },
+    ],
+    signal: '常规',
+    weight: 0.81,
+    calls: 23,
+    lastCall: '今天 08:05',
+  },
+  {
+    id: 'c5',
+    type: '灵感',
+    topic: '个人灵感',
+    when: '09-13 01:22',
+    source: '深夜手记',
+    state: '待确认',
+    conf: 0.42,
+    title: 'context 应该会「结痂」',
+    summary:
+      '想法：旧 context 不该被删掉，而是逐渐失去细节、只留结论，像记忆结痂。系统可以定期把同一主题的旧条目压成一条「结论卡」，原文折叠但可展开。',
+    entities: [
+      { name: '结论卡', kind: '概念' },
+      { name: '渐进压缩', kind: '概念' },
+    ],
+    relations: [{ a: '渐进压缩', rel: '呼应', b: '衰减曲线打分' }],
+    excerpt: '不是忘记，是变模糊。模糊是特性不是 bug。',
+    log: [
+      { when: '09-13', what: '语音转文字导入' },
+      { when: '09-20', what: 'agent 建议关联到 c1「衰减曲线」——待确认' },
+    ],
+    signal: '常规',
+    weight: 0.38,
+    calls: 3,
+    lastCall: '—',
+  },
+  {
+    id: 'c6',
+    type: '截图',
+    topic: '竞品观察',
+    when: '09-11 16:05',
+    source: 'Rewind · 时间线界面',
+    state: '已整理',
+    conf: 0.79,
+    title: '竞品时间线界面：按天折叠、按人聚合',
+    summary:
+      '界面把一天压成一行，悬停展开缩略图；侧栏按「人」而不是按「文件」聚合。值得借鉴的是聚合维度可切换，而不是固定按时间。',
+    entities: [
+      { name: 'Rewind', kind: '产品' },
+      { name: '聚合维度', kind: '概念' },
+    ],
+    relations: [{ a: 'Rewind', rel: '采用', b: '按人聚合' }],
+    excerpt: '（截图：左侧人物列表，右侧横向时间轴，热力条表示活跃度）',
+    log: [
+      { when: '09-11', what: '截图上传，OCR 识别界面文字' },
+      { when: '09-11', what: '归入「竞品观察」' },
+    ],
+    signal: '常规',
+    weight: 0.47,
+    calls: 6,
+    lastCall: '6 天前',
+  },
+  {
+    id: 'c7',
+    type: '会议纪要',
+    topic: '商务',
+    when: '09-09 10:00',
+    source: '腾讯会议',
+    state: '已归档',
+    conf: 0.86,
+    title: '与投资人 1:1：数据资产的护城河',
+    summary:
+      '对方关心的不是模型，而是「用户攒下来的 context 能不能迁移走」。建议我们把可导出做成卖点而非风险，同时强调整理后的结构化数据才是壁垒。',
+    entities: [
+      { name: '数据可导出', kind: '议题' },
+      { name: '结构化壁垒', kind: '概念' },
+    ],
+    relations: [{ a: '数据可导出', rel: '转化为', b: '产品卖点' }],
+    excerpt: '“如果我攒了两年，我能带走吗？”——这个问题问了三遍。',
+    log: [
+      { when: '09-09', what: '录音转写导入' },
+      { when: '09-10', what: '人工修正分类：研究 → 商务' },
+    ],
+    signal: '常规',
+    weight: 0.22,
+    calls: 1,
+    lastCall: '—',
+  },
+  {
+    id: 'c8',
+    type: '对话片段',
+    topic: '项目 · Aurora',
+    when: '09-08 19:30',
+    source: 'Slack · #aurora',
+    state: '已整理',
+    conf: 0.83,
+    title: '上传队列崩了两次，原因是并发解析',
+    summary:
+      '大文件并发解析导致内存打满。临时方案改成串行队列，长期要按文件大小分级调度。运维记录已挂在这条下面。',
+    entities: [
+      { name: '上传队列', kind: '模块' },
+      { name: '并发解析', kind: '故障因' },
+      { name: 'Aurora', kind: '项目' },
+    ],
+    relations: [
+      { a: '并发解析', rel: '导致', b: '内存打满' },
+      { a: '串行队列', rel: '临时缓解', b: '上传队列崩溃' },
+    ],
+    excerpt: '19:31 告警：解析 worker OOM ×3\n19:44 改串行，恢复',
+    log: [
+      { when: '09-08', what: '从 Slack 频道自动同步' },
+      { when: '09-08', what: '抽取故障因果关系' },
+    ],
+    signal: '常规',
+    weight: 0.66,
+    calls: 12,
+    lastCall: '2 天前',
+  },
+];
+
+/** 示例工具表（需替换为真实环境的服务状态）。 */
+export const INITIAL_TOOLS: AgentTool[] = [
+  { id: 'gpu', name: 'GPU 服务器 · aurora-01', meta: 'A100 80G ×2 · 显存 31%', status: '空闲', on: true },
+  { id: 'cpu', name: '本地 CPU 工作站', meta: '32 核 · 负载 0.7', status: '空闲', on: true },
+  { id: 'pg', name: '主库 PostgreSQL', meta: 'context.items · 8,412 行', status: '在线', on: true },
+  { id: 'vec', name: '向量库 Qdrant', meta: '3 个集合 · 1.2M 向量', status: '在线', on: true },
+  { id: 'obj', name: '对象存储 MinIO', meta: '原文与截图 · 46 GB', status: '在线', on: true },
+  { id: 'ocr', name: 'OCR / 转写服务', meta: 'Whisper + PaddleOCR', status: '占用', on: false },
+  { id: 'web', name: '网页抓取', meta: '剪藏正文提取', status: '离线', on: false },
+];
+
+/** 近两周入库柱状图的日期窗口（14 天，MM-DD）。 */
+export function sparkDays(): string[] {
+  const days: string[] = [];
+  for (let d = 7; d <= 20; d++) days.push('09-' + String(d).padStart(2, '0'));
+  return days;
+}
