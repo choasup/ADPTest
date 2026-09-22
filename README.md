@@ -43,6 +43,9 @@ npm run deploy   # 部署到 Cloudflare Workers（需 CLOUDFLARE_API_TOKEN）
 
 ## 部署 · Cloudflare Workers
 
+线上地址：**https://contexta.adpworker.com**（自定义域名，国内直连可用）；
+备用：https://contexta.ly-choas.workers.dev（workers.dev 在部分地区被干扰）。
+
 同一套整理逻辑跑在两种运行时上：`server/`（Node/Express，本地开发）与
 `worker/`（Cloudflare Workers，生产部署）。纯逻辑抽在 `server/organize.mjs`
 由两侧共享。

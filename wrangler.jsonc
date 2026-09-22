@@ -11,6 +11,10 @@
   "durable_objects": {
     "bindings": [{ "name": "LIBRARY", "class_name": "ContextaLibrary" }]
   },
+  "routes": [
+    { "pattern": "contexta.adpworker.com", "custom_domain": true }
+  ],
+  "workers_dev": true,
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ContextaLibrary"] }],
   "observability": { "enabled": true }
 }
