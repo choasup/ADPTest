@@ -6,3 +6,4 @@ dist
 server/data
 .wrangler
 .agents
+.dev.vars

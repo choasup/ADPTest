@@ -201,6 +201,37 @@ export function adjustSiblingWeights(items, topic, excludeId) {
   return adjusted.length;
 }
 
+// ——— LLM 整理结果应用（server/llm.mjs 的 normalize 输出）———
+
+/** 把 LLM 整理结果写回条目（含噪声处理）。 */
+export function applyLLMResult(item, r) {
+  if (r.type) item.type = r.type;
+  item.topic = r.topic;
+  item.conf = r.conf;
+  if (r.title) item.title = r.title;
+  item.entities = r.entities;
+  item.relations = r.relations;
+  if (r.noise) {
+    item.state = '待确认';
+    item.weight = 0.1;
+    item.summary = '（噪声，建议低权重归档）';
+    item.log.push({
+      when: dateOnly(),
+      what: 'agent 判定为噪声' + (r.noiseReason ? '：' + r.noiseReason : '') + '，已降权待归档',
+    });
+  } else {
+    item.summary = r.summary || item.summary;
+    item.state = item.conf < 0.5 ? '待确认' : '已整理';
+  }
+}
+
+// ——— 指令识别（投喂框文本是否为整理指令而非材料）———
+
+/** 匹配已知指令模式：合成时间线 / 合并重复 / 重抽实体 / 重新整理。 */
+export function isInstruction(text) {
+  return /时间线|合并|去重|抽取.+实体|重新整理/.test(String(text || '').trim());
+}
+
 // ——— 人类信号（唯一可写） ———
 
 const SIGNAL_WEIGHT = { 重要: 0.96, 常规: null, 不重要: 0.12, 忘掉: 0.02 };
