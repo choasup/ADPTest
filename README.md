@@ -34,10 +34,37 @@ agent 自动完成解析、摘要、归类、实体与关系抽取、权重维�
 
 ```bash
 npm install
-npm run dev      # API(8787) + vite dev server 并行启动（/api 已代理）
+npm run dev      # Node 版：API(8787) + vite dev server 并行（/api 已代理）
+npm run dev:cf   # Cloudflare 版：本地 workerd（Static Assets + DO + alarm）
 npm run build    # TypeScript 检查 + 生产构建
-npm start        # 生产模式：单进程服务 dist 静态文件 + API（http://localhost:8787）
+npm start        # Node 生产模式：单进程服务 dist + API（http://localhost:8787）
+npm run deploy   # 部署到 Cloudflare Workers（需 CLOUDFLARE_API_TOKEN）
 ```
+
+## 部署 · Cloudflare Workers
+
+同一套整理逻辑跑在两种运行时上：`server/`（Node/Express，本地开发）与
+`worker/`（Cloudflare Workers，生产部署）。纯逻辑抽在 `server/organize.mjs`
+由两侧共享。
+
+Cloudflare 架构：
+
+```
+Static Assets（dist/，SPA fallback）── run_worker_first: /api/*
+        │
+Worker worker/index.mjs ── /api/* → DO RPC
+        │
+Durable Object ContextaLibrary（SQLite）
+  ├── library 表：整库状态（items/tools/pending/organizeQueue）
+  ├── images 表：截图 base64 归档
+  └── alarm()：受理后 ~2.5s 异步整理（替代 Node 版 setTimeout，无竞态）
+```
+
+- 配置见 `wrangler.jsonc`（DO 迁移 `new_sqlite_classes`、observability 开启）
+- 部署：`CLOUDFLARE_API_TOKEN=<token> npm run deploy`，
+  token 用 [Edit Cloudflare Workers 模板](https://developers.cloudflare.com/workers/wrangler/commands/#deploy)创建
+- Cloudflare Skills 与 MCP 配置：`npx skills add cloudflare/skills`
+  （安装到 `.agents/`，已 gitignore）；MCP 服务器配置见 `.vscode/mcp.json`
 
 ## 架构
 
