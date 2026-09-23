@@ -184,6 +184,17 @@ export class ContextaLibrary extends DurableObject {
     if (!t) return { ok: true };
     this.pushMsg('user', t);
 
+    // 闲聊/系统说明：硬编码速答（不进 LLM，避免无谓等待）
+    if (/你能做(哪些|什么|啥)|你是什么|你(是)?谁|介绍(下|一下)?(自己|你|功能)|能干什么|功能|帮助|help/i.test(t)) {
+      this.pushMsg('agent',
+        '我是 Contexta 上下文库的控制台 agent。' +
+        '你可以把会议纪要、对话、文章、链接、灵感、截图等材料丢给我，我帮你自动整理（归类/摘要/实体/关系）；' +
+        '之后可以随时说「查一下xx」「把这条改xxx」「删掉xx」「库里有多少条」来管理内容。' +
+        '当前模式：' + (this.state.execMode === 'auto' ? 'Auto（写操作直接执行）' : 'Approve（写操作需你确认）') + '。');
+      this.save();
+      return { ok: true };
+    }
+
     // 系统级指令直通
     if (/重新整理|重新组织/.test(t)) {
       const r = await this.runInstructionText('重新整理');
@@ -206,11 +217,14 @@ export class ContextaLibrary extends DurableObject {
       return { ok: true };
     }
 
-    const r = await llmOrganize(t, { ...creds, timeoutMs: 90000 });
+    // 60s 软超时（再长用户等待感更差；如再超时即降级）
+    const r = await llmOrganize(t, { ...creds, timeoutMs: 60000 });
     if (!r.ok) {
       this.state.llmError = r.error;
       const runLog = runInstructionOnItems(this.state.items, t);
-      this.pushMsg('agent', runLog || '收到，稍后可说「重新整理」让我重新处理。');
+      this.pushMsg('agent', runLog ||
+        'agent 暂时连不上，处理起来慢了。这条我先按规则判断了一下，' +
+        '稍后再说「重新整理」可让我用 LLM 重新处理这条。');
       this.save();
       return { ok: true };
     }
