@@ -129,12 +129,13 @@ export class ContextaLibrary extends DurableObject {
 
   // ——— 对话面板 RPC ———
 
-  pushMsg(role, text, opCard) {
+  pushMsg(role, text, opCard, reasoning) {
     this.state.chatLog.push({
       role,
       text: String(text || '').slice(0, 600),
       ts: nowStamp(),
       ...(opCard ? { opCard } : {}),
+      ...(reasoning ? { reasoning: String(reasoning).slice(0, 800) } : {}),
     });
     if (this.state.chatLog.length > 300) {
       this.state.chatLog = this.state.chatLog.slice(-300);
@@ -209,7 +210,8 @@ export class ContextaLibrary extends DurableObject {
     if (!r.ok) {
       this.state.llmError = r.error;
       const runLog = runInstructionOnItems(this.state.items, t);
-      this.pushMsg('agent', runLog || '（LLM 暂不可用，请稍后重试）');
+      this.pushMsg('agent', runLog || '（LLM 暂不可用，请稍后重试）', undefined,
+        'LLM 调用失败：' + String(r.error).slice(0, 120));
       this.save();
       return { ok: true };
     }
@@ -218,10 +220,10 @@ export class ContextaLibrary extends DurableObject {
     const intent = r.data; // {op, data, reply}
     const WRITE_OPS = ['add', 'delete', 'update'];
 
-    // 只读操作（query/stats/none）：直接执行
+    // 只读操作（query/stats/none）：直接执行（附推理过程）
     if (!WRITE_OPS.includes(intent.op)) {
       const { runLog } = this.execIntent(intent, t);
-      this.pushMsg('agent', runLog || intent.reply);
+      this.pushMsg('agent', runLog || intent.reply, undefined, r.reasoning);
       this.save();
       return { ok: true };
     }
@@ -238,7 +240,7 @@ export class ContextaLibrary extends DurableObject {
       }
       this.pushMsg('agent', runLog || intent.reply, {
         opId: null, kind: intent.op, summary: this.opSummary(intent), status: 'done',
-      });
+      }, r.reasoning);
       this.save();
       return { ok: true };
     }
@@ -248,7 +250,7 @@ export class ContextaLibrary extends DurableObject {
     this.state.pendingOps.push({ id: opId, intent, rawInput: t, ts: nowStamp() });
     this.pushMsg('agent', intent.reply || this.opSummary(intent), {
       opId, kind: intent.op, summary: this.opSummary(intent), status: 'pending',
-    });
+    }, r.reasoning);
     this.save();
     return { ok: true, pendingOpId: opId };
   }

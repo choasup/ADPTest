@@ -312,5 +312,25 @@ export function runInstructionOnItems(items, text) {
     return `agent 已对全部 ${items.length} 条 context 重跑实体抽取，${changed} 条的实体列表有更新。`;
   }
 
-  return `指令「${t}」已受理，agent 将在下一轮整理中评估执行。`;
+  // 诚实降级：查询/统计类直接用规则出结果，其余说明 LLM 不可用
+  if (/多少|几条|统计|总览|概况/.test(t)) {
+    const byTopic = {};
+    for (const i of items) byTopic[i.topic] = (byTopic[i.topic] || 0) + 1;
+    const detail = Object.entries(byTopic).map(([k, n]) => `${k} ${n} 条`).join('，');
+    return `（LLM 暂不可用，按本地规则统计）库内共 ${items.length} 条 context${detail ? '：' + detail : ''}。`;
+  }
+  const q = t.match(/查|找|搜索|看看|列出/);
+  if (q && t.length < 30) {
+    const kw = t.replace(/查一下|查查|查询|搜索|找一下|找找|看看|列出|的|所有|相关|关于/g, '').trim();
+    if (kw) {
+      const hits = items.filter((i) =>
+        (i.title + i.summary + i.excerpt).toLowerCase().includes(kw.toLowerCase()),
+      );
+      const names = hits.slice(0, 8).map((i) => `「${i.title}」`).join('、');
+      return hits.length
+        ? `（LLM 暂不可用，按本地规则检索）找到 ${hits.length} 条：${names}。`
+        : `（LLM 暂不可用，按本地规则检索）没有找到匹配「${kw}」的条目。`;
+    }
+  }
+  return `（LLM 暂不可用）已收到「${t.slice(0, 40)}」，这条我暂时只能原样记录，稍后说「重新整理」可重跑。`;
 }

@@ -1031,3 +1031,29 @@
   margin-left: 6px;
   vertical-align: middle;
 }
+
+/* 推理过程折叠块 */
+.chat-reasoning {
+  margin: 0 0 8px;
+  border: 1px dotted var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-neutral-200) 50%, transparent);
+}
+.chat-reasoning summary {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--color-neutral-600);
+  cursor: pointer;
+  padding: 4px 8px;
+  user-select: none;
+}
+.chat-reasoning-body {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--color-neutral-700);
+  padding: 0 8px 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}

@@ -88,6 +88,7 @@ export interface ChatMessage {
   text: string;
   ts: string;
   opCard?: ChatOpCard;
+  reasoning?: string;
 }
 
 export interface ChatState {

@@ -126,6 +126,12 @@ export default function ChatPanel({ chat, onSync }: ChatPanelProps) {
         {chat.messages.map((m, idx) => (
           <div key={idx} className={'chat-msg ' + m.role}>
             <div className="chat-bubble">
+              {m.reasoning && (
+                <details className="chat-reasoning">
+                  <summary>推理过程</summary>
+                  <div className="chat-reasoning-body">{m.reasoning}</div>
+                </details>
+              )}
               {m.text}
               {m.opCard && (
                 <div className={'chat-opcard ' + m.opCard.status}>

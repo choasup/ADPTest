@@ -167,7 +167,7 @@ export async function llmOrganize(text, opts = {}) {
         fail(`ws-evt: ${err.Code ?? '?'} ${err.Message || ''}`);
       } else if (t === 'response.completed') {
         const parsed = extractJson(reply);
-        if (parsed) done({ ok: true, data: normalize(parsed) });
+        if (parsed) done({ ok: true, data: normalize(parsed.json), reasoning: parsed.reasoning });
         else fail('bad-json: ' + reply.slice(0, 120));
       }
     };
@@ -175,7 +175,7 @@ export async function llmOrganize(text, opts = {}) {
     ws.onclose = () => {
       if (!settled) {
         const parsed = extractJson(reply);
-        if (parsed) done({ ok: true, data: normalize(parsed) });
+        if (parsed) done({ ok: true, data: normalize(parsed.json), reasoning: parsed.reasoning });
         else fail('ws-closed: ' + reply.slice(0, 120));
       }
     };
@@ -184,7 +184,8 @@ export async function llmOrganize(text, opts = {}) {
 
 // ——— JSON 提取与校验（与 SSE 版一致） ———
 
-/** 从模型输出里抠出意图 JSON（模型可能带思考过程，取 {"op"...} 对象，括号平衡）。 */
+/** 从模型输出里抠出意图 JSON + 其前的推理过程文本。
+ *  返回 { json, reasoning } 或 null。 */
 function extractJson(text) {
   const raw = String(text || '');
   const start = raw.indexOf('{"op"');
@@ -197,7 +198,14 @@ function extractJson(text) {
         depth--;
         if (depth === 0) {
           try {
-            return JSON.parse(raw.slice(start, i + 1));
+            const json = JSON.parse(raw.slice(start, i + 1));
+            // JSON 之前的正文即模型推理过程（去掉思考标签包裹）
+            let reasoning = raw.slice(0, start).trim();
+            reasoning = reasoning
+              .replace(/<think>[\s\S]*?<\/think>/g, '')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
+            return { json, reasoning };
           } catch {}
         }
       }
