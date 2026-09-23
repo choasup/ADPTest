@@ -143,6 +143,16 @@ export function runConsole(items, intent, ctx) {
     };
   }
 
+  if (op === 'sync_meetings') {
+    const meetings = Array.isArray(data.meetings) ? data.meetings : [];
+    // 由调用方（DO）接管真实导入；这里只回执（console 保持纯函数，
+    // sync 涉及 state.syncedMeetingIds 与 alarm 排队，属 DO 职责）
+    return {
+      runLog: reply || `收到 ${meetings.length} 场会议待同步。`,
+      effects: { syncMeetings: meetings, hasMore: !!data.hasMore },
+    };
+  }
+
   if (op === 'stats') {
     const byTopic = {};
     for (const i of items) byTopic[i.topic] = (byTopic[i.topic] || 0) + 1;

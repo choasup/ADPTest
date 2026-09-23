@@ -157,14 +157,20 @@ export class ContextaLibrary extends DurableObject {
   }
 
   /** 执行意图（写操作），返回 runLog；幂等由调用方保证。 */
-  execIntent(intent, rawInput) {
+  async execIntent(intent, rawInput) {
     const ctx = {
       nextId: () => this.newItemId(),
       dateOnly,
       nowStamp,
       rawInput,
     };
-    return runConsole(this.state.items, intent, ctx);
+    const result = runConsole(this.state.items, intent, ctx);
+    // sync_meetings 效果特殊处理：走会议导入管道（去重 + alarm 排队）
+    if (result && result.effects && result.effects.syncMeetings) {
+      const r = await this.importMeetings(result.effects.syncMeetings);
+      result.runLog = r.runLog + (result.effects.hasMore ? '（还有更多，说「继续同步会议」可拉下一批）' : '');
+    }
+    return result;
   }
 
   /** 对话入口：消息 → LLM 路由 → Auto 直接执行 / Approve 写操作进确认队列。 */
@@ -202,6 +208,11 @@ export class ContextaLibrary extends DurableObject {
       this.save();
       return { ok: true };
     }
+    // 「继续同步会议」：续拉指令（与首轮「同步会议」同等路由）
+    if (/继续同步|继续导入/.test(t)) {
+      // 改写为标准同步请求再走 LLM 路由（Agent 侧带上下文判断续拉范围）
+      // 无需特殊处理，落到下面 LLM 路由即可
+    }
 
     const creds = {
       secretId: this.env.ADP_SECRET_ID,
@@ -235,7 +246,7 @@ export class ContextaLibrary extends DurableObject {
 
     // 只读操作（query/stats/none）：直接执行（附推理过程）
     if (!WRITE_OPS.includes(intent.op)) {
-      const { runLog } = this.execIntent(intent, t);
+      const { runLog } = await this.execIntent(intent, t);
       this.pushMsg('agent', runLog || intent.reply, undefined, r.reasoning);
       this.save();
       return { ok: true };
@@ -243,7 +254,7 @@ export class ContextaLibrary extends DurableObject {
 
     // 写操作：模式分流
     if (this.state.execMode === 'auto') {
-      const { runLog, effects } = this.execIntent(intent, t);
+      const { runLog, effects } = await this.execIntent(intent, t);
       if (effects && effects.added && effects.added.length) {
         this.state.pending += effects.added.length;
         this.state.latestId = effects.added[0];
@@ -274,7 +285,7 @@ export class ContextaLibrary extends DurableObject {
     if (idx < 0) return { ok: false, error: 'not-found' };
     const { intent, rawInput } = this.state.pendingOps[idx];
     this.state.pendingOps.splice(idx, 1);
-    const { runLog, effects } = this.execIntent(intent, rawInput);
+    const { runLog, effects } = await this.execIntent(intent, rawInput);
     if (effects && effects.added && effects.added.length) {
       this.state.pending += effects.added.length;
       this.state.latestId = effects.added[0];
