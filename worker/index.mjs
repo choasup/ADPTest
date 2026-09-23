@@ -72,6 +72,11 @@ export default {
       return json(await stub.clearPending());
     }
 
+    if (route === 'reset' && method === 'POST') {
+      const { mode = 'seed', keepIds = [] } = await readJson(request);
+      return json(await stub.reset(mode, keepIds));
+    }
+
     return json({ error: '未知接口' }, 404);
   },
 };
