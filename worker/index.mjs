@@ -100,6 +100,10 @@ export default {
       return json(await stub.setMode(mode));
     }
 
+    if (route === 'chat/clear' && method === 'POST') {
+      return json(await stub.clearChat());
+    }
+
     return json({ error: '未知接口' }, 404);
   },
 };

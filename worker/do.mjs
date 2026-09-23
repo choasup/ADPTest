@@ -243,10 +243,10 @@ export class ContextaLibrary extends DurableObject {
       return { ok: true };
     }
 
-    // approve：进确认队列
+    // approve：进确认队列（操作卡承载全部信息，reply 只在卡外保留一句说明）
     const opId = 'op-' + crypto.randomUUID().slice(0, 8);
     this.state.pendingOps.push({ id: opId, intent, rawInput: t, ts: nowStamp() });
-    this.pushMsg('agent', `（待确认）${intent.reply || this.opSummary(intent)}`, {
+    this.pushMsg('agent', intent.reply || this.opSummary(intent), {
       opId, kind: intent.op, summary: this.opSummary(intent), status: 'pending',
     });
     this.save();
@@ -288,11 +288,18 @@ export class ContextaLibrary extends DurableObject {
     return { ok: true };
   }
 
-  /** 切换执行模式。 */
+  /** 清空对话历史（保留条目数据）。 */
+  async clearChat() {
+    this.state.chatLog = [];
+    this.state.pendingOps = [];
+    this.save();
+    return { ok: true };
+  }
+
+  /** 切换执行模式（不写消息流——面板开关即状态本身）。 */
   async setMode(mode) {
     if (mode !== 'auto' && mode !== 'approve') return { ok: false, error: 'bad-mode' };
     this.state.execMode = mode;
-    this.pushMsg('agent', mode === 'auto' ? '已切换为 Auto：写操作将直接执行。' : '已切换为 Approve：写操作需要你确认后执行。');
     this.save();
     return { ok: true, mode };
   }
