@@ -312,16 +312,47 @@ export function runInstructionOnItems(items, text) {
     return `agent 已对全部 ${items.length} 条 context 重跑实体抽取，${changed} 条的实体列表有更新。`;
   }
 
-  // 诚实降级：查询/统计类直接用规则出结果，其余说明 LLM 不可用
-  if (/多少|几条|统计|总览|概况/.test(t)) {
+  // —— 降级路径的语义化兜底：常见自然问法直接规则应答 ——
+
+  // 统计类
+  if (/多少|几条|统计|总览|概况|有多少/.test(t)) {
     const byTopic = {};
     for (const i of items) byTopic[i.topic] = (byTopic[i.topic] || 0) + 1;
     const detail = Object.entries(byTopic).map(([k, n]) => `${k} ${n} 条`).join('，');
     return `库内共 ${items.length} 条 context${detail ? '：' + detail : ''}。`;
   }
-  const q = t.match(/查|找|搜索|看看|列出/);
-  if (q && t.length < 30) {
-    const kw = t.replace(/查一下|查查|查询|搜索|找一下|找找|看看|列出|的|所有|相关|关于/g, '').trim();
+
+  // 「库里有什么/有哪些xx/列出xx」：按类型列资源
+  const listMatch = t.match(/(有哪些|有什么|都有什么|列出来|列举|列出)(.*?)(记录|条目|内容|材料|东西)?[?？。!！]?$/);
+  if (listMatch) {
+    const kw = (listMatch[2] || '').replace(/的|所有|一些|全部/g, '').trim();
+    let hits = items;
+    if (/会议/.test(kw)) hits = items.filter((i) => i.type === '会议纪要' || String(i.source).includes('腾讯会议'));
+    else if (kw) hits = items.filter((i) => (i.title + i.summary + i.excerpt).toLowerCase().includes(kw.toLowerCase()));
+    if (!hits.length) {
+      return kw ? `库里目前没有${kw}相关的条目。` : '库里目前是空的。';
+    }
+    const lines = hits.slice(0, 10).map((i) => `「${i.title}」（${i.when.slice(0, 5)}，${i.topic}）`);
+    const more = hits.length > 10 ? `…等共 ${hits.length} 条` : `共 ${hits.length} 条`;
+    return `库里的${kw || '全部'}条目（${more}）：\n${lines.join('\n')}`;
+  }
+
+  // 「有xx吗/存过xx吗」：存在性问答
+  const hasMatch = t.match(/(有没有|有吗|存在|存过)(.*?)(吗|么)?[?？。!！]?$/);
+  if (hasMatch) {
+    const kw = (hasMatch[2] || '').replace(/的|相关|关于/g, '').trim();
+    if (kw) {
+      const hits = items.filter((i) => (i.title + i.summary + i.excerpt).toLowerCase().includes(kw.toLowerCase()));
+      return hits.length
+        ? `有，找到 ${hits.length} 条相关条目：${hits.slice(0, 5).map((i) => `「${i.title}」`).join('、')}。`
+        : `目前没有存过「${kw}」相关的内容，需要的话直接发给我。`;
+    }
+  }
+
+  // 常规查询动词
+  const q = t.match(/查|找|搜索|看看|列出|检索/);
+  if (q && t.length < 40) {
+    const kw = t.replace(/查一下|查查|查询|搜索|找一下|找找|看看|列出|检索|的|所有|相关|关于|帮我|一下/g, '').trim();
     if (kw) {
       const hits = items.filter((i) =>
         (i.title + i.summary + i.excerpt).toLowerCase().includes(kw.toLowerCase()),
@@ -332,5 +363,25 @@ export function runInstructionOnItems(items, text) {
         : `没有找到匹配「${kw}」的条目。`;
     }
   }
-  return `已收到「${t.slice(0, 40)}」，这条我暂时只能原样记录，稍后说「重新整理」可重跑。`;
+
+  // 「xx是什么/讲了什么」：读内容问答（滑窗宽松匹配）
+  const whatMatch = t.match(/(.{2,20}?)(是什么|讲了什么|说了什么|什么内容|是什么内容)/);
+  if (whatMatch) {
+    const kw = whatMatch[1].replace(/那|条|个|这个|关于/g, '').trim();
+    if (kw) {
+      const grams = new Set();
+      for (let k = 0; k < kw.length - 1; k++) grams.add(kw.slice(k, k + 2));
+      const hit = items.find((i) => {
+        const h = (i.title + i.summary + i.excerpt).toLowerCase();
+        for (const g of grams) if (h.includes(g.toLowerCase())) return true;
+        return false;
+      });
+      if (hit) {
+        return `「${hit.title}」：${hit.summary || hit.excerpt.slice(0, 150)}`;
+      }
+      return `没有找到讲「${kw}」的条目。`;
+    }
+  }
+
+  return `已收到「${t.slice(0, 40)}」。这个问法我暂时没完全理解——可以直接说「有哪些会议记录」「查xx」「删掉xx」，或把要存的材料发给我。`;
 }
