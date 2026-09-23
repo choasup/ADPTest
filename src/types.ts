@@ -78,9 +78,10 @@ export const TOPICS: string[] = [
 ];
 
 export const PRESETS: string[] = [
-  '把 Aurora 的会议纪要合成时间线',
-  '合并重复条目',
-  '重新抽取所有实体',
+  '查一下所有 Aurora 相关的',
+  '把检索评测集那条标题改简洁点',
+  '删掉所有噪声条目',
+  '库里现在有多少条',
 ];
 
 /** 信号 → 权重映射（null 表示保持当前权重） */

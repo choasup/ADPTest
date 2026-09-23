@@ -1,25 +1,24 @@
 /** 整理 agent — Node Express 侧编排（fs 落盘 + setTimeout 异步整理）。
- *  纯逻辑见 ./organize.mjs（与 Cloudflare Worker 共用）。
+ *  控制台范式：文本输入先经 LLM 意图路由（console.mjs 执行 CRUD）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStore, commit, dateOnly } from './store.mjs';
+import { getStore, commit, dateOnly, nowStamp } from './store.mjs';
 import {
-  createItemFromText,
   createItemFromImage,
   organizeItem,
   adjustSiblingWeights,
   applyLLMResult,
-  isInstruction,
   applySignalToItem,
   regenerateItemSummary,
   runInstructionOnItems,
 } from './organize.mjs';
 import { llmOrganize } from './llm.mjs';
+import { runConsole } from './console.mjs';
 
 const UPLOAD_DIR = path.join(import.meta.dirname, 'data', 'uploads');
 
-/** 整理延迟：受理后 2.5s 完成整理（模拟异步 OCR / 摘要 / 归类）。 */
+/** 图片整理延迟：受理后 2.5s。 */
 const ORGANIZE_DELAY_MS = 2500;
 
 function newItemId() {
@@ -29,57 +28,67 @@ function newItemId() {
   return id;
 }
 
-/** 受理一批投喂：文本 + 图片（base64）。文本若为整理指令则直接执行。 */
+/** 控制台入口：文本 → LLM 意图路由 → console.mjs CRUD；图片 → 异步整理。 */
 export async function acceptFeed(text, images) {
   const s = getStore();
   const t = String(text || '').trim();
+  const hasImages = !!(images && images.length);
 
-  if (t && !(images && images.length) && isInstruction(t)) {
-    const runLog = await runInstruction(t);
-    return runLog;
-  }
-
-  const created = [];
-
-  if (t) {
-    const id = newItemId();
-    const item = createItemFromText(id, t);
-    s.items.unshift(item);
-    created.push(item);
-  }
-
-  for (const img of images ?? []) {
-    const id = newItemId();
-    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-    const safe = String(img.name || '截图.png').replace(/[^\w.\-一-龥]/g, '_');
-    const file = `${id}-${safe}`;
-    try {
-      fs.writeFileSync(path.join(UPLOAD_DIR, file), Buffer.from(img.data, 'base64'));
-    } catch {
-      // 落盘失败不阻塞整理
+  if (hasImages) {
+    const created = [];
+    for (const img of images ?? []) {
+      const id = newItemId();
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+      const safe = String(img.name || '截图.png').replace(/[^\w.\-一-龥]/g, '_');
+      const file = `${id}-${safe}`;
+      try {
+        fs.writeFileSync(path.join(UPLOAD_DIR, file), Buffer.from(img.data, 'base64'));
+      } catch {
+        // 落盘失败不阻塞整理
+      }
+      const item = createItemFromImage(id, img.name, file);
+      s.items.unshift(item);
+      created.push(item.id);
     }
-    const item = createItemFromImage(id, img.name, file);
-    s.items.unshift(item);
-    created.push(item);
+    commit();
+    for (const id of created) {
+      setTimeout(() => void organizeById(id), ORGANIZE_DELAY_MS + Math.random() * 800);
+    }
+    return `agent 已收下 ${created.length} 张截图，正在 OCR 识别并整理。`;
   }
 
+  if (!t) return '';
+
+  const creds = {
+    secretId: process.env.ADP_SECRET_ID,
+    secretKey: process.env.ADP_SECRET_KEY,
+    appKey: process.env.ADP_APP_KEY,
+  };
+  if (creds.secretId && creds.secretKey && creds.appKey) {
+    const r = await llmOrganize(t, creds);
+    if (r.ok) {
+      const { runLog, effects } = runConsole(s.items, r.data, {
+        nextId: newItemId,
+        dateOnly,
+        nowStamp,
+        rawInput: t,
+      });
+      if (effects && effects.added && effects.added.length) {
+        s.pending += effects.added.length;
+        s.latestId = effects.added[0];
+      }
+      if (effects && effects.queryIds && effects.queryIds.length) {
+        s.latestId = effects.queryIds[0];
+      }
+      commit();
+      return runLog;
+    }
+  }
+
+  // LLM 不可用降级：规则指令
+  const runLog = runInstructionOnItems(s.items, t);
   commit();
-
-  for (const item of created) {
-    setTimeout(() => void organizeById(item.id), ORGANIZE_DELAY_MS + Math.random() * 800);
-  }
-
-  const parts = [];
-  if (created.length) {
-    const imgs = (images ?? []).length;
-    const texts = created.length - imgs;
-    const seg = [];
-    if (texts) seg.push(`${texts} 条文本`);
-    if (imgs) seg.push(`${imgs} 张截图`);
-    parts.push(`已收下 ${seg.join('、')}，agent 正在整理`);
-  }
-  if (t) parts.push(`指令「${t}」将在下一轮整理中执行`);
-  return parts.length ? `agent ${parts.join('；')}。` : '';
+  return runLog || `已收到「${t.slice(0, 40)}」。`;
 }
 
 async function organizeById(id) {

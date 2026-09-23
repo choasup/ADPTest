@@ -1,23 +1,22 @@
 /** ContextaLibrary — Durable Object。
- *  单线程事务状态 + alarm 驱动的异步整理（替代 Node 版 setTimeout 流水线，无竞态）。
- *  整理优先走 ADP LLM（llm.mjs），失败自动降级规则版（organize.mjs）。
+ *  控制台范式：所有输入先经 LLM 意图路由（llm.mjs），再由 console.mjs
+ *  执行确定性 CRUD。图片走 alarm 异步整理。LLM 失败降级规则版。
  */
 import { DurableObject } from 'cloudflare:workers';
 import { SEED_ITEMS, SEED_TOOLS } from '../server/seed.mjs';
 import {
-  createItemFromText,
   createItemFromImage,
   organizeItem,
   adjustSiblingWeights,
   applyLLMResult,
-  isInstruction,
   applySignalToItem,
   regenerateItemSummary,
   runInstructionOnItems,
 } from '../server/organize.mjs';
 import { llmOrganize } from '../server/llm.mjs';
+import { runConsole } from '../server/console.mjs';
 
-/** 整理延迟：受理后 2.5s 由 alarm 开始逐条整理（LLM 每条最长 ~30s）。 */
+/** 图片整理延迟：受理后 2.5s 由 alarm 开始。 */
 const ORGANIZE_DELAY_MS = 2500;
 
 function dateOnly() {
@@ -25,6 +24,15 @@ function dateOnly() {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${mm}-${dd}`;
+}
+
+function nowStamp() {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}-${dd} ${hh}:${mi}`;
 }
 
 function freshState() {
@@ -103,59 +111,91 @@ export class ContextaLibrary extends DurableObject {
     };
   }
 
-  /** 受理投喂：文本 + 图片（base64）。文本若是整理指令则直接执行。 */
+  /** 控制台入口：文本走 LLM 意图路由 → console.mjs 执行 CRUD；
+   *  图片走 alarm 异步整理（图片无文本可路由）。 */
   async feed(text, images) {
     const t = String(text || '').trim();
-    if (t && !(images && images.length) && isInstruction(t)) {
-      return this.runInstructionText(t);
+    const hasImages = !!(images && images.length);
+
+    // 图片：归档 + 排队异步整理
+    if (hasImages) {
+      const created = [];
+      for (const img of images ?? []) {
+        const id = this.newItemId();
+        const safe = String(img.name || '截图.png').replace(/[^\w.\-一-龥]/g, '_');
+        const file = `${id}-${safe}`;
+        this.ctx.storage.sql.exec(
+          'INSERT INTO images (id, name, data) VALUES (?, ?, ?)',
+          id,
+          img.name ?? '截图.png',
+          img.data ?? '',
+        );
+        const item = createItemFromImage(id, img.name, file);
+        this.state.items.unshift(item);
+        created.push(item.id);
+      }
+      this.state.organizeQueue.push(...created);
+      this.save();
+      const cur = await this.ctx.storage.getAlarm();
+      const target = Date.now() + ORGANIZE_DELAY_MS;
+      if (cur == null || cur > target) {
+        await this.ctx.storage.setAlarm(target);
+      }
+      const imgNote = `已收下 ${created.length} 张截图，agent 正在 OCR 识别并整理`;
+      if (!t) return `agent ${imgNote}。`;
+      return `agent ${imgNote}；文本部分将一并处理。`;
     }
 
-    const created = [];
+    if (!t) return '';
 
-    if (t) {
-      const id = this.newItemId();
-      const item = createItemFromText(id, t);
-      this.state.items.unshift(item);
-      created.push(item.id);
+    // 文本：LLM 意图路由（控制台核心链路）
+    const creds = {
+      secretId: this.env.ADP_SECRET_ID,
+      secretKey: this.env.ADP_SECRET_KEY,
+      appKey: this.env.ADP_APP_KEY,
+    };
+
+    // 兜底指令（LLM 不可用时保持可用性）：重新整理 / 规则指令
+    const fallback = () => {
+      if (/重新整理/.test(t)) return this.runInstructionText(t);
+      const runLog = runInstructionOnItems(this.state.items, t);
+      this.save();
+      return runLog || `已收到「${t.slice(0, 40)}」（LLM 不可用，按普通文本处理）。`;
+    };
+
+    if (!(creds.secretId && creds.secretKey && creds.appKey)) {
+      return fallback();
     }
 
-    for (const img of images ?? []) {
-      const id = this.newItemId();
-      const safe = String(img.name || '截图.png').replace(/[^\w.\-一-龥]/g, '_');
-      const file = `${id}-${safe}`;
-      // 图片归档（原 base64 落 SQLite，供后续真实 OCR 使用）
-      this.ctx.storage.sql.exec(
-        'INSERT INTO images (id, name, data) VALUES (?, ?, ?)',
-        id,
-        img.name ?? '截图.png',
-        img.data ?? '',
-      );
-      const item = createItemFromImage(id, img.name, file);
-      this.state.items.unshift(item);
-      created.push(item.id);
+    const r = await llmOrganize(t, creds);
+    if (!r.ok) {
+      this.state.llmError = r.error;
+      return fallback();
+    }
+    this.state.llmError = null;
+
+    // console.mjs 执行意图（CRUD）
+    const ctx = {
+      nextId: () => this.newItemId(),
+      dateOnly,
+      nowStamp,
+      rawInput: t,
+    };
+    const { runLog, effects } = runConsole(this.state.items, r.data, ctx);
+
+    // 新增条目 → 排队做后续精整（摘要微调走 alarm，保持 add 即时可见）
+    if (effects && effects.added && effects.added.length) {
+      this.state.pending += effects.added.length;
+      this.state.latestId = effects.added[0];
+      this.state.lastAdjustCount = 0;
+    }
+    // 查询结果 → 前端定位选中
+    if (effects && effects.queryIds && effects.queryIds.length) {
+      this.state.latestId = effects.queryIds[0];
     }
 
-    this.state.organizeQueue.push(...created);
     this.save();
-
-    // alarm：取最早的截止时间（不推迟已排定的更早整理）
-    const cur = await this.ctx.storage.getAlarm();
-    const target = Date.now() + ORGANIZE_DELAY_MS;
-    if (cur == null || cur > target) {
-      await this.ctx.storage.setAlarm(target);
-    }
-
-    const parts = [];
-    if (created.length) {
-      const imgs = (images ?? []).length;
-      const texts = created.length - imgs;
-      const seg = [];
-      if (texts) seg.push(`${texts} 条文本`);
-      if (imgs) seg.push(`${imgs} 张截图`);
-      parts.push(`已收下 ${seg.join('、')}，agent 正在整理`);
-    }
-    if (t) parts.push(`指令「${t}」将在下一轮整理中执行`);
-    return parts.length ? `agent ${parts.join('；')}。` : '';
+    return runLog;
   }
 
   /** 投喂框指令路由：重新整理 = 全量重跑 LLM；其余走规则指令。 */

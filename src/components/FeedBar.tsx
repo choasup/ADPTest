@@ -84,7 +84,7 @@ export default function FeedBar({
       onDrop={onDrop}
     >
       <div className="feed-top">
-        <span className="kicker">投喂 / 指令</span>
+        <span className="kicker">控制台</span>
         {PRESETS.map((p) => (
           <span
             key={p}
@@ -105,7 +105,7 @@ export default function FeedBar({
       <div className="feed-input-row">
         <input
           className="input"
-          placeholder="粘贴一段话、链接，拖入截图，或告诉它哪些不重要了…"
+          placeholder="告诉 agent 想做什么：投喂材料，或「删掉关于xx的」「把标题改成xx」「查一下xx」…"
           value={instruction}
           onChange={(e) => onInstruction(e.target.value)}
           onKeyDown={onKeyDown}

@@ -184,11 +184,10 @@ export async function llmOrganize(text, opts = {}) {
 
 // ——— JSON 提取与校验（与 SSE 版一致） ———
 
-/** 从模型输出里抠出 JSON（模型可能带思考过程，取最后一个完整 {"type"...} 对象）。 */
+/** 从模型输出里抠出意图 JSON（模型可能带思考过程，取 {"op"...} 对象，括号平衡）。 */
 function extractJson(text) {
   const raw = String(text || '');
-  // 优先找最终的 {"type": 开头对象
-  const start = raw.indexOf('{"type"');
+  const start = raw.indexOf('{"op"');
   if (start >= 0) {
     // 从该起点做括号平衡
     let depth = 0;
@@ -204,41 +203,24 @@ function extractJson(text) {
       }
     }
   }
-  // 兜底：最后一个 { 到 }（取大括号平衡）
-  const last = raw.lastIndexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (last >= 0 && end > last) {
-    try {
-      return JSON.parse(raw.slice(last, end + 1));
-    } catch {}
-  }
   return null;
 }
 
+const VALID_OPS = ['add', 'delete', 'update', 'query', 'stats', 'none'];
 const VALID_TYPES = ['会议纪要', '对话片段', '文档', '链接剪藏', '灵感', '截图'];
 const VALID_TOPICS = ['项目 · Aurora', '记忆系统研究', '个人灵感', '竞品观察', '商务', '待归类'];
 
-/** 校验并裁剪模型输出，保证落库字段全部合法。 */
+/** 校验意图协议输出：{op, data, reply}。add 的整理字段就地裁剪。 */
 function normalize(d) {
-  return {
-    type: VALID_TYPES.includes(d.type) ? d.type : null,
-    topic: VALID_TOPICS.includes(d.topic) ? d.topic : '待归类',
-    conf: Math.max(0, Math.min(0.99, Number(d.conf) || 0.5)),
-    title: String(d.title || '').trim().slice(0, 30) || null,
-    summary: String(d.summary || '').trim().slice(0, 220),
-    entities: Array.isArray(d.entities)
-      ? d.entities
-          .filter((e) => e && e.name)
-          .slice(0, 8)
-          .map((e) => ({ name: String(e.name).slice(0, 24), kind: String(e.kind || '概念').slice(0, 10) }))
-      : [],
-    relations: Array.isArray(d.relations)
-      ? d.relations
-          .filter((r) => r && r.a && r.b)
-          .slice(0, 5)
-          .map((r) => ({ a: String(r.a).slice(0, 24), rel: String(r.rel || '关联').slice(0, 12), b: String(r.b).slice(0, 24) }))
-      : [],
-    noise: !!d.noise,
-    noiseReason: d.noise_reason ? String(d.noise_reason).slice(0, 100) : '',
-  };
+  const op = VALID_OPS.includes(d.op) ? d.op : 'none';
+  const data = (d.data && typeof d.data === 'object') ? d.data : {};
+  if (op === 'add') {
+    data.type = VALID_TYPES.includes(data.type) ? data.type : '对话片段';
+    data.topic = VALID_TOPICS.includes(data.topic) ? data.topic : '待归类';
+    data.conf = Math.max(0, Math.min(0.99, Number(data.conf) || 0.5));
+    data.title = String(data.title || '').slice(0, 30);
+    data.summary = String(data.summary || '').slice(0, 220);
+    data.noise = !!data.noise;
+  }
+  return { op, data, reply: String(d.reply || '').slice(0, 200) };
 }
