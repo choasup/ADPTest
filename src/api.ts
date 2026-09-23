@@ -7,6 +7,7 @@ export interface AppState {
   pending: number;
   latestId: string | null;
   adjustCount: number;
+  chat: ChatState;
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -71,4 +72,44 @@ export function readFileAsImage(file: File): Promise<FeedImage> {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+}
+
+// ——— 对话面板 ———
+
+export interface ChatOpCard {
+  opId: string | null;
+  kind: string;
+  summary: string;
+  status: 'pending' | 'done' | 'rejected';
+}
+
+export interface ChatMessage {
+  role: 'user' | 'agent';
+  text: string;
+  ts: string;
+  opCard?: ChatOpCard;
+}
+
+export interface ChatState {
+  messages: ChatMessage[];
+  pendingOps: { id: string; intent: unknown; rawInput: string; ts: string }[];
+  mode: 'auto' | 'approve';
+}
+
+export function postChat(
+  text: string,
+  images: FeedImage[],
+): Promise<{ ok: boolean }> {
+  return post('/api/chat', { text, images });
+}
+
+export function postOp(
+  action: 'confirm' | 'reject',
+  opId: string,
+): Promise<{ ok: boolean; runLog?: string }> {
+  return post('/api/op', { action, opId });
+}
+
+export function postMode(mode: 'auto' | 'approve'): Promise<{ ok: boolean }> {
+  return post('/api/mode', { mode });
 }

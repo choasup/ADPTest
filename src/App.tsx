@@ -2,17 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import ContextList from './components/ContextList';
-import FeedBar from './components/FeedBar';
+import ChatPanel from './components/ChatPanel';
 import DetailPanel from './components/DetailPanel';
 import { useNarrow } from './hooks/useNarrow';
 import {
   fetchState,
-  postFeed,
   postRegenerate,
   postSignal,
   postToggleTool,
 } from './api';
-import type { FeedImage } from './api';
+import type { ChatState } from './api';
 import type { AgentTool, ContextItem, Signal } from './types';
 
 /** Tweaks（设计稿上的可调项，按默认值实现）。 */
@@ -36,8 +35,8 @@ export default function App() {
   const [topic, setTopic] = useState('全部');
   const [type, setType] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [instruction, setInstruction] = useState('');
-  const [runLog, setRunLog] = useState('');
+  const [chat, setChat] = useState<ChatState>({ messages: [], pendingOps: [], mode: 'approve' });
+  const [rightTab, setRightTab] = useState<'agent' | 'detail'>('agent');
 
   const narrow = useNarrow(900);
 
@@ -46,6 +45,7 @@ export default function App() {
       const s = await fetchState();
       setItems(s.items);
       setTools(s.tools);
+      setChat(s.chat ?? { messages: [], pendingOps: [], mode: 'approve' });
       latestIdRef.current = s.latestId;
       setLoaded(true);
     } catch {
@@ -89,33 +89,19 @@ export default function App() {
     const item = items.find((i) => i.id === id);
     if (!item) return;
     try {
-      const { runLog } = await postSignal(id, signal);
-      setRunLog(runLog);
+      await postSignal(id, signal);
       void syncState();
     } catch {
-      setRunLog(`与 agent 通信失败，信号未写入：「${item.title}」`);
+      /* 信号失败由轮询自愈 */
     }
   };
 
   const handleRegenerate = async (item: ContextItem) => {
     try {
-      const { runLog } = await postRegenerate(item.id);
-      setRunLog(runLog);
+      await postRegenerate(item.id);
       void syncState();
     } catch {
-      setRunLog(`与 agent 通信失败，未能为「${item.title}」重新生成。`);
-    }
-  };
-
-  /** 投喂 / 指令提交：文本 + 图片附件一并交给服务端 agent。 */
-  const handleFeed = async (text: string, images: FeedImage[]) => {
-    if (!text.trim() && !images.length) return;
-    try {
-      const { runLog } = await postFeed(text, images);
-      setRunLog(runLog);
-      void syncState();
-    } catch {
-      setRunLog('与 agent 通信失败，本次投喂未送达。');
+      /* 重新生成失败由轮询自愈 */
     }
   };
 
@@ -177,27 +163,43 @@ export default function App() {
             total={items.length}
             title={listTitle}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setRightTab('detail');
+            }}
             dense={DENSITY === '紧凑'}
-          />
-          <FeedBar
-            instruction={instruction}
-            onInstruction={setInstruction}
-            onSubmit={handleFeed}
-            runLog={runLog}
-            tools={tools}
           />
         </section>
 
         {showDetail && (
-          <DetailPanel
-            item={selected}
-            narrow={narrow}
-            onClose={() => setSelectedId(null)}
-            onSignal={handleSignal}
-            onRegenerate={handleRegenerate}
-            showAgentLog={SHOW_AGENT_LOG}
-          />
+          <div className="chat-panel">
+            <div className="right-tabs">
+              <button
+                className={'right-tab' + (rightTab === 'agent' ? ' on' : '')}
+                onClick={() => setRightTab('agent')}
+              >
+                Agent
+              </button>
+              <button
+                className={'right-tab' + (rightTab === 'detail' ? ' on' : '')}
+                onClick={() => setRightTab('detail')}
+              >
+                详情
+                {selected && <span className="right-tab-dot" />}
+              </button>
+            </div>
+            {rightTab === 'agent' && <ChatPanel chat={chat} onSync={() => void syncState()} />}
+            {rightTab === 'detail' && (
+              <DetailPanel
+                item={selected}
+                narrow={narrow}
+                onClose={() => setRightTab('agent')}
+                onSignal={handleSignal}
+                onRegenerate={handleRegenerate}
+                showAgentLog={SHOW_AGENT_LOG}
+              />
+            )}
+          </div>
         )}
       </div>
     </div>

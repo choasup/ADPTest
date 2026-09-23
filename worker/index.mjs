@@ -82,6 +82,24 @@ export default {
       return json(await stub.importMeetings(meetings));
     }
 
+    // ——— 对话面板 ———
+    if (route === 'chat' && method === 'POST') {
+      const { text = '', images = [] } = await readJson(request);
+      return json(await stub.chat(text, images ?? []));
+    }
+
+    if (route === 'op' && method === 'POST') {
+      const { action, opId } = await readJson(request);
+      if (action === 'confirm') return json(await stub.confirmOp(opId));
+      if (action === 'reject') return json(await stub.rejectOp(opId));
+      return json({ error: '未知操作' }, 400);
+    }
+
+    if (route === 'mode' && method === 'POST') {
+      const { mode } = await readJson(request);
+      return json(await stub.setMode(mode));
+    }
+
     return json({ error: '未知接口' }, 404);
   },
 };

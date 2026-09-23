@@ -46,6 +46,12 @@ function freshState() {
     organizeQueue: [],
     /** 最近一次 LLM 失败原因（null=正常），随 state 一起返回供诊断。 */
     llmError: null,
+    /** 对话面板：消息历史 */
+    chatLog: [],
+    /** 待确认操作（Approve 模式下写操作先进队列） */
+    pendingOps: [],
+    /** 执行模式：auto（自动执行）| approve（写操作需确认） */
+    execMode: 'approve',
   };
 }
 
@@ -73,6 +79,11 @@ export class ContextaLibrary extends DurableObject {
       if (!this.state) {
         this.state = freshState();
         this.save();
+      } else {
+        // 旧 state 升级：补对话面板字段
+        if (!this.state.chatLog) this.state.chatLog = [];
+        if (!this.state.pendingOps) this.state.pendingOps = [];
+        if (!this.state.execMode) this.state.execMode = 'approve';
       }
     });
   }
@@ -108,7 +119,182 @@ export class ContextaLibrary extends DurableObject {
         on: !!(this.env.ADP_SECRET_ID && this.env.ADP_SECRET_KEY && this.env.ADP_APP_KEY),
         lastError: this.state.llmError || null,
       },
+      chat: {
+        messages: this.state.chatLog.slice(-100),
+        pendingOps: this.state.pendingOps,
+        mode: this.state.execMode,
+      },
     };
+  }
+
+  // ——— 对话面板 RPC ———
+
+  pushMsg(role, text, opCard) {
+    this.state.chatLog.push({
+      role,
+      text: String(text || '').slice(0, 600),
+      ts: nowStamp(),
+      ...(opCard ? { opCard } : {}),
+    });
+    if (this.state.chatLog.length > 300) {
+      this.state.chatLog = this.state.chatLog.slice(-300);
+    }
+  }
+
+  /** 意图 → 人类可读操作摘要（确认卡片文案）。 */
+  opSummary(intent) {
+    const d = intent.data || {};
+    const t = d.target || d.text || '';
+    switch (intent.op) {
+      case 'add': return d.noise ? `新增条目（判为噪声）：${d.title || ''}` : `新增条目「${d.title || '未命名'}」`;
+      case 'delete': return t === 'all' ? '清空全部条目' : `删除匹配「${t}」的条目`;
+      case 'update': return `修改匹配「${t || d.target || ''}」的条目`;
+      case 'query': return `检索「${t || '全部'}」`;
+      case 'stats': return '统计库内条目';
+      default: return '对话';
+    }
+  }
+
+  /** 执行意图（写操作），返回 runLog；幂等由调用方保证。 */
+  execIntent(intent, rawInput) {
+    const ctx = {
+      nextId: () => this.newItemId(),
+      dateOnly,
+      nowStamp,
+      rawInput,
+    };
+    return runConsole(this.state.items, intent, ctx);
+  }
+
+  /** 对话入口：消息 → LLM 路由 → Auto 直接执行 / Approve 写操作进确认队列。 */
+  async chat(text, images) {
+    const t = String(text || '').trim();
+    const hasImages = !!(images && images.length);
+
+    // 图片：复用 feed 的图片管道，同时记入对话
+    if (hasImages) {
+      this.pushMsg('user', t ? `${t}（+${images.length} 张图片）` : `（${images.length} 张图片）`);
+      const r = await this.feed('', images);
+      this.pushMsg('agent', r.replace(/^agent /, ''));
+      this.save();
+      return { ok: true };
+    }
+
+    if (!t) return { ok: true };
+    this.pushMsg('user', t);
+
+    // 系统级指令直通
+    if (/重新整理|重新组织/.test(t)) {
+      const r = await this.runInstructionText('重新整理');
+      this.pushMsg('agent', r);
+      this.save();
+      return { ok: true };
+    }
+
+    const creds = {
+      secretId: this.env.ADP_SECRET_ID,
+      secretKey: this.env.ADP_SECRET_KEY,
+      appKey: this.env.ADP_APP_KEY,
+    };
+
+    if (!(creds.secretId && creds.secretKey && creds.appKey)) {
+      this.pushMsg('agent', 'LLM 通道未配置，本次输入按规则指令处理。');
+      const runLog = runInstructionOnItems(this.state.items, t);
+      if (runLog) this.pushMsg('agent', runLog);
+      this.save();
+      return { ok: true };
+    }
+
+    const r = await llmOrganize(t, { ...creds, timeoutMs: 90000 });
+    if (!r.ok) {
+      this.state.llmError = r.error;
+      const runLog = runInstructionOnItems(this.state.items, t);
+      this.pushMsg('agent', runLog || '（LLM 暂不可用，请稍后重试）');
+      this.save();
+      return { ok: true };
+    }
+    this.state.llmError = null;
+
+    const intent = r.data; // {op, data, reply}
+    const WRITE_OPS = ['add', 'delete', 'update'];
+
+    // 只读操作（query/stats/none）：直接执行
+    if (!WRITE_OPS.includes(intent.op)) {
+      const { runLog } = this.execIntent(intent, t);
+      this.pushMsg('agent', runLog || intent.reply);
+      this.save();
+      return { ok: true };
+    }
+
+    // 写操作：模式分流
+    if (this.state.execMode === 'auto') {
+      const { runLog, effects } = this.execIntent(intent, t);
+      if (effects && effects.added && effects.added.length) {
+        this.state.pending += effects.added.length;
+        this.state.latestId = effects.added[0];
+      }
+      if (effects && effects.queryIds && effects.queryIds.length) {
+        this.state.latestId = effects.queryIds[0];
+      }
+      this.pushMsg('agent', runLog || intent.reply, {
+        opId: null, kind: intent.op, summary: this.opSummary(intent), status: 'done',
+      });
+      this.save();
+      return { ok: true };
+    }
+
+    // approve：进确认队列
+    const opId = 'op-' + crypto.randomUUID().slice(0, 8);
+    this.state.pendingOps.push({ id: opId, intent, rawInput: t, ts: nowStamp() });
+    this.pushMsg('agent', `（待确认）${intent.reply || this.opSummary(intent)}`, {
+      opId, kind: intent.op, summary: this.opSummary(intent), status: 'pending',
+    });
+    this.save();
+    return { ok: true, pendingOpId: opId };
+  }
+
+  /** 确认执行待确认操作。 */
+  async confirmOp(opId) {
+    const idx = this.state.pendingOps.findIndex((p) => p.id === opId);
+    if (idx < 0) return { ok: false, error: 'not-found' };
+    const { intent, rawInput } = this.state.pendingOps[idx];
+    this.state.pendingOps.splice(idx, 1);
+    const { runLog, effects } = this.execIntent(intent, rawInput);
+    if (effects && effects.added && effects.added.length) {
+      this.state.pending += effects.added.length;
+      this.state.latestId = effects.added[0];
+    }
+    // 更新消息卡片状态
+    for (let k = this.state.chatLog.length - 1; k >= 0; k--) {
+      const m = this.state.chatLog[k];
+      if (m.opCard && m.opCard.opId === opId) { m.opCard.status = 'done'; break; }
+    }
+    this.pushMsg('agent', runLog);
+    this.save();
+    return { ok: true, runLog };
+  }
+
+  /** 拒绝待确认操作。 */
+  async rejectOp(opId) {
+    const idx = this.state.pendingOps.findIndex((p) => p.id === opId);
+    if (idx < 0) return { ok: false, error: 'not-found' };
+    this.state.pendingOps.splice(idx, 1);
+    for (let k = this.state.chatLog.length - 1; k >= 0; k--) {
+      const m = this.state.chatLog[k];
+      if (m.opCard && m.opCard.opId === opId) { m.opCard.status = 'rejected'; break; }
+    }
+    this.pushMsg('agent', '已取消该操作。');
+    this.save();
+    return { ok: true };
+  }
+
+  /** 切换执行模式。 */
+  async setMode(mode) {
+    if (mode !== 'auto' && mode !== 'approve') return { ok: false, error: 'bad-mode' };
+    this.state.execMode = mode;
+    this.pushMsg('agent', mode === 'auto' ? '已切换为 Auto：写操作将直接执行。' : '已切换为 Approve：写操作需要你确认后执行。');
+    this.save();
+    return { ok: true, mode };
   }
 
   /** 控制台入口：文本走 LLM 意图路由 → console.mjs 执行 CRUD；
