@@ -317,7 +317,7 @@ export function runInstructionOnItems(items, text) {
     const byTopic = {};
     for (const i of items) byTopic[i.topic] = (byTopic[i.topic] || 0) + 1;
     const detail = Object.entries(byTopic).map(([k, n]) => `${k} ${n} 条`).join('，');
-    return `（LLM 暂不可用，按本地规则统计）库内共 ${items.length} 条 context${detail ? '：' + detail : ''}。`;
+    return `库内共 ${items.length} 条 context${detail ? '：' + detail : ''}。`;
   }
   const q = t.match(/查|找|搜索|看看|列出/);
   if (q && t.length < 30) {
@@ -328,9 +328,9 @@ export function runInstructionOnItems(items, text) {
       );
       const names = hits.slice(0, 8).map((i) => `「${i.title}」`).join('、');
       return hits.length
-        ? `（LLM 暂不可用，按本地规则检索）找到 ${hits.length} 条：${names}。`
-        : `（LLM 暂不可用，按本地规则检索）没有找到匹配「${kw}」的条目。`;
+        ? `找到 ${hits.length} 条：${names}。`
+        : `没有找到匹配「${kw}」的条目。`;
     }
   }
-  return `（LLM 暂不可用）已收到「${t.slice(0, 40)}」，这条我暂时只能原样记录，稍后说「重新整理」可重跑。`;
+  return `已收到「${t.slice(0, 40)}」，这条我暂时只能原样记录，稍后说「重新整理」可重跑。`;
 }

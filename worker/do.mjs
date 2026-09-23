@@ -210,7 +210,7 @@ export class ContextaLibrary extends DurableObject {
     if (!r.ok) {
       this.state.llmError = r.error;
       const runLog = runInstructionOnItems(this.state.items, t);
-      this.pushMsg('agent', runLog || '（LLM 暂不可用，请稍后重试）', undefined,
+      this.pushMsg('agent', runLog || '收到，稍后可说「重新整理」让我重新处理。', undefined,
         'LLM 调用失败：' + String(r.error).slice(0, 120));
       this.save();
       return { ok: true };
