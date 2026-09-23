@@ -94,9 +94,11 @@ export default function FeedBar({
             {p}
           </span>
         ))}
-        <span className="feed-tools" />
+        {tools.length > 0 && (
+          <span className="feed-tools" />
+        )}
         <span className="feed-tools-note">
-          本轮将调用：{activeToolLine}
+          {tools.length > 0 ? `本轮将调用：${activeToolLine}` : ''}
           {attachments.length > 0 ? ` · 待提交截图 ${attachments.length} 张` : ''}
         </span>
       </div>

@@ -271,7 +271,8 @@ export class ContextaLibrary extends DurableObject {
 
   /**
    * 重置数据：清掉 mock/测试数据，可选保留指定 id 的条目。
-   * mode: 'seed'（回种子 8 条）| 'empty'（清空）| 'keep'（只留 keepIds + 种子）
+   * mode: 'seed'（回种子）| 'empty'（清空）| 'keep'（只留 keepIds + 种子）。
+   * 工具列表同步重置为种子（当前为空）。
    */
   async reset(mode = 'seed', keepIds = []) {
     const s = this.state;
@@ -280,6 +281,7 @@ export class ContextaLibrary extends DurableObject {
       .filter(Boolean);
     const fresh = freshState();
     s.items = mode === 'empty' ? keep : [...keep, ...fresh.items];
+    s.tools = structuredClone(fresh.tools);
     // 重排 id 空间，避免与保留条目冲突
     let maxNum = 0;
     for (const i of s.items) {

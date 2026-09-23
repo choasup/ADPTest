@@ -35,7 +35,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [topic, setTopic] = useState('全部');
   const [type, setType] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>('c1');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [instruction, setInstruction] = useState('');
   const [runLog, setRunLog] = useState('');
 
