@@ -148,6 +148,11 @@ export class ContextaLibrary extends DurableObject {
 
     if (!t) return '';
 
+    // 系统级指令：重新整理 = 全量重排 LLM（不进 LLM 路由，避免被理解为澄清提问）
+    if (/重新整理|重新组织/.test(t)) {
+      return this.runInstructionText('重新整理');
+    }
+
     // 文本：LLM 意图路由（控制台核心链路）
     const creds = {
       secretId: this.env.ADP_SECRET_ID,
@@ -198,9 +203,73 @@ export class ContextaLibrary extends DurableObject {
     return runLog;
   }
 
+  /**
+   * 腾讯会议批量导入：按 meeting_id 去重，纪要文本建条目后排队 LLM 整理。
+   * @param {Array<{meeting_id:string, subject:string, start_time:string, minutes_text:string}>} meetings
+   */
+  async importMeetings(meetings) {
+    if (!this.state.syncedMeetingIds) this.state.syncedMeetingIds = [];
+    const synced = new Set(this.state.syncedMeetingIds);
+    const imported = [];
+    const skipped = [];
+
+    for (const m of meetings ?? []) {
+      if (!m || !m.minutes_text || !m.minutes_text.trim()) {
+        skipped.push(m?.meeting_id ?? '(无内容)');
+        continue;
+      }
+      if (synced.has(m.meeting_id)) {
+        skipped.push(m.meeting_id);
+        continue;
+      }
+      const id = this.newItemId();
+      const when = (m.start_time || '').replace('T', ' ').slice(5, 16) || nowStamp();
+      const item = {
+        id,
+        type: '会议纪要',
+        topic: '待归类',
+        when,
+        source: `腾讯会议 · ${m.subject || '未命名会议'}`,
+        state: '待确认',
+        conf: 0,
+        title: String(m.subject || '未命名会议').slice(0, 30),
+        summary: '腾讯会议纪要导入，LLM 整理中…',
+        entities: [],
+        relations: [],
+        excerpt: `【腾讯会议纪要】${m.subject || ''}（${m.start_time || ''}）\n\n${String(m.minutes_text).slice(0, 4000)}`,
+        log: [{ when: dateOnly(), what: `从腾讯会议同步（meeting_id ${m.meeting_id}）` }],
+        signal: '常规',
+        weight: 0.5,
+        calls: 0,
+        lastCall: '—',
+      };
+      this.state.items.unshift(item);
+      this.state.organizeQueue.push(id);
+      synced.add(m.meeting_id);
+      this.state.syncedMeetingIds.push(m.meeting_id);
+      imported.push(m.meeting_id);
+    }
+
+    if (imported.length) {
+      const cur = await this.ctx.storage.getAlarm();
+      const target = Date.now() + 500;
+      if (cur == null || cur > target) {
+        await this.ctx.storage.setAlarm(target);
+      }
+    }
+    this.save();
+    return {
+      imported: imported.length,
+      skipped: skipped.length,
+      total: (meetings ?? []).length,
+      runLog: imported.length
+        ? `已从腾讯会议导入 ${imported.length} 场会议纪要${skipped.length ? `（跳过 ${skipped.length} 场：已导入或无纪要）` : ''}，LLM 正在逐场整理。`
+        : `没有新会议可导入${skipped.length ? `（${skipped.length} 场已导入过或无纪要）` : ''}。`,
+    };
+  }
+
   /** 投喂框指令路由：重新整理 = 全量重跑 LLM；其余走规则指令。 */
-  async runInstructionText(t) {
-    if (/重新整理/.test(t)) {
+  async runInstructionText(t) {    if (/重新整理/.test(t)) {
       const ids = this.state.items.map((i) => i.id);
       this.state.organizeQueue.push(...ids);
       const cur = await this.ctx.storage.getAlarm();
@@ -236,11 +305,15 @@ export class ContextaLibrary extends DurableObject {
       let viaLLM = false;
 
       if (creds.secretId && creds.secretKey && creds.appKey) {
-        const r = await llmOrganize(item.excerpt, creds);
-        if (r.ok) {
-          applyLLMResult(item, r.data);
+        // 长文本（会议纪要）思考久，超时放宽到 180s
+        const r = await llmOrganize(item.excerpt, { ...creds, timeoutMs: 300000 });
+        // 意图协议：add 的 data 里是整理字段；其余 op 不适用于后台整理
+        if (r.ok && r.data && r.data.op === 'add' && r.data.data) {
+          applyLLMResult(item, r.data.data);
           viaLLM = true;
           this.state.llmError = null;
+        } else if (r.ok) {
+          organizeItem(item);
         } else {
           organizeItem(item);
           this.state.llmError = r.error;
@@ -334,6 +407,7 @@ export class ContextaLibrary extends DurableObject {
     s.lastAdjustCount = 0;
     s.organizeQueue = [];
     s.llmError = null;
+    s.syncedMeetingIds = [];
     this.save();
     return { ok: true, count: s.items.length, kept: keep.map((i) => i.id) };
   }

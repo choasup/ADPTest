@@ -77,6 +77,11 @@ export default {
       return json(await stub.reset(mode, keepIds));
     }
 
+    if (route === 'meetings/import' && method === 'POST') {
+      const { meetings = [] } = await readJson(request);
+      return json(await stub.importMeetings(meetings));
+    }
+
     return json({ error: '未知接口' }, 404);
   },
 };
