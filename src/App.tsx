@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header';
-import AgentNotice from './components/AgentNotice';
 import Sidebar from './components/Sidebar';
 import ContextList from './components/ContextList';
 import FeedBar from './components/FeedBar';
@@ -8,7 +7,6 @@ import DetailPanel from './components/DetailPanel';
 import { useNarrow } from './hooks/useNarrow';
 import {
   fetchState,
-  postClearPending,
   postFeed,
   postRegenerate,
   postSignal,
@@ -22,7 +20,7 @@ const DENSITY = '舒适' as '舒适' | '紧凑';
 const SHOW_ENTITIES = true;
 const SHOW_AGENT_LOG = true;
 
-/** 状态轮询间隔：agent 异步整理完成后前端据此感知 pending。 */
+/** 状态轮询间隔：agent 异步整理完成后前端据此感知更新。 */
 const POLL_MS = 2000;
 
 /** 文境 Contexta — Agent 维护的上下文记忆库，人只投喂与给信号。
@@ -31,10 +29,8 @@ const POLL_MS = 2000;
 export default function App() {
   const [items, setItems] = useState<ContextItem[]>([]);
   const [tools, setTools] = useState<AgentTool[]>([]);
-  const [pending, setPending] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const latestIdRef = useRef<string | null>(null);
-  const adjustCountRef = useRef(3);
 
   const [query, setQuery] = useState('');
   const [topic, setTopic] = useState('全部');
@@ -50,9 +46,7 @@ export default function App() {
       const s = await fetchState();
       setItems(s.items);
       setTools(s.tools);
-      setPending(s.pending);
       latestIdRef.current = s.latestId;
-      adjustCountRef.current = s.adjustCount;
       setLoaded(true);
     } catch {
       setLoaded(true); // 显示空态而非白屏，回执会提示通信失败
@@ -125,22 +119,6 @@ export default function App() {
     }
   };
 
-  /** 提示条动作：清空筛选，跳到 agent 最近整理的条目。 */
-  const reviewPending = async () => {
-    setTopic('全部');
-    setType(null);
-    setQuery('');
-    const target = latestIdRef.current ?? items[0]?.id ?? null;
-    setSelectedId(target);
-    setPending(0);
-    setRunLog('已定位到 agent 最近整理的条目。');
-    try {
-      await postClearPending();
-    } catch {
-      // 下一轮轮询会重新同步，忽略
-    }
-  };
-
   const toggleTool = async (id: string) => {
     // 乐观更新，失败回滚由轮询纠正
     setTools((prev) => prev.map((t) => (t.id === id ? { ...t, on: !t.on } : t)));
@@ -173,12 +151,6 @@ export default function App() {
   return (
     <div className="app">
       <Header query={query} onQuery={setQuery} items={items} />
-
-      <AgentNotice
-        pending={pending}
-        adjustCount={adjustCountRef.current}
-        onReview={reviewPending}
-      />
 
       <div className={'app-grid' + (narrow ? ' narrow' : '')}>
         {showSidebar && (

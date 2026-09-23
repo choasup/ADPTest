@@ -11,8 +11,8 @@ export default function Header({ query, onQuery, items }: HeaderProps) {
   return (
     <header className="app-header">
       <div className="brand">
-        <span className="brand-name">文境</span>
-        <span className="brand-sub">Contexta</span>
+        <span className="brand-name">Contexta</span>
+        <span className="brand-sub">上下文库</span>
       </div>
       <div className="header-search">
         <input

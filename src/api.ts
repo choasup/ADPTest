@@ -59,10 +59,6 @@ export function postToggleTool(
   return post('/api/tools/toggle', { id });
 }
 
-export function postClearPending(): Promise<{ ok: boolean }> {
-  return post('/api/pending/clear', {});
-}
-
 /** File → { name, data(base64) }。 */
 export function readFileAsImage(file: File): Promise<FeedImage> {
   return new Promise((resolve, reject) => {
