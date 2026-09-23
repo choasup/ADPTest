@@ -124,11 +124,15 @@ export function runConsole(items, intent, ctx) {
     const q = String(data.text || '').trim().toLowerCase();
     const topic = data.topic;
     const type = data.type;
+    // 「会议记录/会议」类关键词自动映射类型过滤（LLM 常抽 text=会议记录 + type=会议纪要）
+    const isMeetingQuery = /会议/.test(q) || type === '会议纪要';
+    const qq = q.replace(/会议记录|会议/g, '').trim();
     const hits = items.filter((i) => {
       if (topic && i.topic !== topic) return false;
       if (type && i.type !== type) return false;
-      if (!q) return true;
-      return (i.title + i.summary + i.excerpt + i.entities.map((e) => e.name).join('')).toLowerCase().includes(q);
+      if (isMeetingQuery && i.type !== '会议纪要' && !String(i.source).includes('腾讯会议')) return false;
+      if (!qq) return true;
+      return (i.title + i.summary + i.excerpt + i.entities.map((e) => e.name).join('')).toLowerCase().includes(qq);
     });
     const names = hits.slice(0, 8).map((i) => `「${i.title}」`).join('、');
     return {

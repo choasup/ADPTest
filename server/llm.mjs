@@ -105,6 +105,7 @@ export async function llmOrganize(text, opts = {}) {
   return new Promise((resolve) => {
     let reply = '';
     let settled = false;
+    let completedTimer = null;
     const done = (result) => {
       if (settled) return;
       settled = true;
@@ -143,7 +144,8 @@ export async function llmOrganize(text, opts = {}) {
             ConversationId: uid(),
             Contents: [{ Type: 'text', Text: text }],
             Incremental: true,
-            Stream: 'enable',
+            // 非流式：整段一次返回，规避快思考模型的流尾包截断
+            Stream: 'disable',
           },
         };
         ws.send('42' + JSON.stringify(['request', reqBody]));
@@ -166,9 +168,14 @@ export async function llmOrganize(text, opts = {}) {
         const err = evt.Error || {};
         fail(`ws-evt: ${err.Code ?? '?'} ${err.Message || ''}`);
       } else if (t === 'response.completed') {
-        const parsed = extractJson(reply);
-        if (parsed) done({ ok: true, data: normalize(parsed.json), reasoning: parsed.reasoning });
-        else fail('bad-json: ' + reply.slice(0, 120));
+        // 延迟 400ms 收尾：completed 事件可能先于最后几个 text.delta 到达
+        // （流式缓冲），先等缓冲排空再解析
+        if (completedTimer) clearTimeout(completedTimer);
+        completedTimer = setTimeout(() => {
+          const parsed = extractJson(reply) || extractJson(repairJson(reply));
+          if (parsed) done({ ok: true, data: normalize(parsed.json), reasoning: parsed.reasoning });
+          else fail('bad-json: ' + reply.slice(0, 160));
+        }, 400);
       }
     };
     ws.onerror = (e) => fail('ws-error: ' + String((e && e.message) || e).slice(0, 120));
@@ -182,32 +189,80 @@ export async function llmOrganize(text, opts = {}) {
   });
 }
 
+// ——— 截断 JSON 自动修复 ———
+
+/** 模型偶发生成提前 EOS（reply 字符串中途截断）：
+ *  逐候选补全（闭字符串→去尾逗号→闭 N 层括号）后尝试解析，
+ *  返回可解析的候选文本（失败返回原文）。 */
+function repairJson(raw) {
+  let t = String(raw || '').trim();
+  t = t.replace(/```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  const re = /\{\s*"op"\s*:/;
+  const m = t.match(re);
+  if (!m) return raw;
+  t = t.slice(t.indexOf(m[0]));
+  // 数未闭合的 { 层数（字符串感知）
+  let depth = 0, inStr = false, escape = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { if (inStr) escape = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+  }
+  let out = t;
+  if (inStr) out += '"';          // 闭字符串
+  out = out.replace(/,\s*$/, ''); // 去尾逗号
+  out += '}'.repeat(Math.max(0, depth)); // 闭所有层
+  // 尝试每一层补全（从全闭到少闭）
+  for (let k = Math.max(0, depth); k >= 0; k--) {
+    const cand = (inStr ? t + '"' : t).replace(/,\s*$/, '') + '}'.repeat(k);
+    try { JSON.parse(cand); return cand; } catch {}
+  }
+  return out;
+}
+
 // ——— JSON 提取与校验（与 SSE 版一致） ———
 
 /** 从模型输出里抠出意图 JSON + 其前的推理过程文本。
- *  返回 { json, reasoning } 或 null。 */
+ *  兼容多种输出习惯：纯 JSON、思考前缀+JSON、markdown 代码块包裹、
+ *  平台注入的前缀内容。返回 { json, reasoning } 或 null。 */
 function extractJson(text) {
   const raw = String(text || '');
-  const start = raw.indexOf('{"op"');
-  if (start >= 0) {
-    // 从该起点做括号平衡
-    let depth = 0;
-    for (let i = start; i < raw.length; i++) {
-      if (raw[i] === '{') depth++;
-      else if (raw[i] === '}') {
-        depth--;
-        if (depth === 0) {
-          try {
-            const json = JSON.parse(raw.slice(start, i + 1));
-            // JSON 之前的正文即模型推理过程（去掉思考标签包裹）
-            let reasoning = raw.slice(0, start).trim();
-            reasoning = reasoning
-              .replace(/<think>[\s\S]*?<\/think>/g, '')
-              .replace(/\n{3,}/g, '\n\n')
-              .trim();
-            return { json, reasoning };
-          } catch {}
-        }
+  if (!raw) return null;
+  // 兼容任意空白习惯：{"op" / {"op": / { "op" : 等
+  const re = /\{\s*\"op\"\s*:/;
+  const m = raw.match(re);
+  if (!m) return null;
+  const start = raw.indexOf(m[0]);
+  if (start < 0) return null;
+  // 从该起点做括号平衡（容忍字符串内的括号：用简单状态机跳过字符串字面量）
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  for (let i = start; i < raw.length; i++) {
+    const ch = raw[i];
+    if (escape) { escape = false; continue; }
+    if (ch === '\\') { if (inStr) escape = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        try {
+          const json = JSON.parse(raw.slice(start, i + 1));
+          // JSON 之前的正文即模型推理过程（去掉思考标签包裹）
+          let reasoning = raw.slice(0, start).trim();
+          reasoning = reasoning
+            .replace(/<think>[\s\S]*?<\/think>/g, '')
+            .replace(/\n{3,}/g, '\n\n')
+            .trim();
+          return { json, reasoning };
+        } catch {}
+        break;
       }
     }
   }
